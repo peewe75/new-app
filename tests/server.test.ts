@@ -52,6 +52,11 @@ class MemoryStore implements Store {
   async saveProposal(proposal: Proposal): Promise<void> {
     this.proposals.set(proposal.id, proposal);
   }
+  async createProposal(proposal: Proposal): Promise<boolean> {
+    if (this.proposals.has(proposal.id)) return false;
+    this.proposals.set(proposal.id, proposal);
+    return true;
+  }
   async getProposal(id: string): Promise<Proposal | null> {
     return this.proposals.get(id) ?? null;
   }
@@ -367,6 +372,7 @@ describe("server senza password", () => {
       preselectedCount: 2,
       warningCodes: ["TERMINE_DA_VERIFICARE"],
       hasBlocking: false,
+      pendingDeadlines: 1,
     });
     expect(list[1]).toMatchObject({
       preselectedCount: 0,
@@ -509,6 +515,27 @@ describe("server senza password", () => {
     expect((await postJson(server.port, proposalPath("plaud:inesistente", "/discard"), {})).status).toBe(404);
   });
 
+  it("rifiuta i nomi host non autorizzati (DNS rebinding), prima di ogni altra verifica", async () => {
+    const path = proposalPath(ROSSI_ID, "/approve");
+    for (const host of ["evil.example:3000", "127.0.0.1.nip.io", "evil.example@127.0.0.1", "localhost.evil.example"]) {
+      const read = await send(server.port, "GET", "/api/proposals", { headers: { Host: host } });
+      expect(read.status, host).toBe(403);
+      expect(read.json().error).toMatch(/nome host non autorizzato.*SEGUITO_ALLOWED_HOSTS/);
+      expect(read.text).not.toContain(ROSSI_ID);
+    }
+    const forged = await postJson(
+      server.port,
+      path,
+      { actionIds: ["a1"] },
+      { Host: "evil.example:3000", Origin: "http://evil.example:3000" },
+    );
+    expect(forged.status).toBe(403);
+    expect(harness.approveCalls).toHaveLength(0);
+    for (const host of [`localhost:${server.port}`, `LOCALHOST:${server.port}`, `[::1]:${server.port}`, "192.168.1.20:3000"]) {
+      expect((await send(server.port, "GET", "/api/health", { headers: { Host: host } })).status, host).toBe(200);
+    }
+  });
+
   it("risponde 405 ai metodi non ammessi", async () => {
     const getApprove = await send(server.port, "GET", proposalPath(ROSSI_ID, "/approve"));
     expect(getApprove.status).toBe(405);
@@ -628,6 +655,21 @@ describe("server con sincronizzazione", () => {
       expect(first.json<unknown>()).toEqual({ processed: 2, skipped: 1, errors: [] });
       expect(second.json<unknown>()).toEqual({ processed: 2, skipped: 1, errors: [] });
       expect(runs).toBe(1);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("server con nomi host autorizzati", () => {
+  it("accetta i nomi configurati, senza distinzione tra maiuscole e minuscole", async () => {
+    const harness = createHarness(outboxDir, { allowedHosts: ["Seguito.Studio.lan"] });
+    const server = await start(harness.services);
+    try {
+      const ok = await send(server.port, "GET", "/api/proposals", { headers: { Host: "seguito.studio.lan:3000" } });
+      expect(ok.status).toBe(200);
+      const other = await send(server.port, "GET", "/api/proposals", { headers: { Host: "altro.studio.lan:3000" } });
+      expect(other.status).toBe(403);
     } finally {
       await server.close();
     }

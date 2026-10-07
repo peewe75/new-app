@@ -29,20 +29,52 @@ import type {
   Warning,
   WarningCode,
 } from "../domain/types.js";
-import type { CaseManagement } from "../enrich/case-management.js";
+import type { CaseManagement, ClientQuery } from "../enrich/case-management.js";
+import {
+  CLIENT_CANDIDATE_MIN_SCORE,
+  CLIENT_LINK_MIN_SCORE,
+  clientForName,
+  linkableMatch,
+  nameIncludes,
+  strongestMatch,
+} from "../enrich/client-link.js";
 
-const CLIENT_MATCH_MIN_SCORE = 0.6;
 const PRESELECT_MIN_CONFIDENCE = 0.75;
+/** Le email non richieste hanno confidenza tra 0,6 e 0,7: si preselezionano solo quelle richieste in chiamata. */
+const PRESELECT_MIN_CONFIDENCE_EMAIL = 0.8;
 const LOW_CONFIDENCE = 0.6;
 
 /** Ruoli cercati nel gestionale. */
 const MATCHABLE_ROLES: ReadonlySet<ParticipantRole> = new Set(["cliente", "potenziale_cliente", "consulente"]);
 const CLIENT_ROLES: ReadonlySet<ParticipantRole> = new Set(["cliente", "potenziale_cliente"]);
 
+/**
+ * Avvisi che restano visibili ma non tolgono la preselezione: una scadenza
+ * processuale lasciata fuori dal calendario è un rischio maggiore di un evento
+ * segnato come da verificare.
+ */
+const NON_GATING_WARNINGS: ReadonlySet<WarningCode> = new Set(["TERMINE_DA_VERIFICARE"]);
+
+/** Riferimenti temporali che diventano falsi se l'email parte in un altro giorno (testo normalizzato). */
+const RELATIVE_TIME =
+  /\b(?:oggi|ieri|domani|dopodomani|stamattina|stamani|stasera|stanotte|questa mattina|questo pomeriggio|questa sera|(?:la )?settimana (?:prossima|scorsa)|(?:la )?prossima settimana|(?:il )?mese (?:prossimo|scorso)|(?:il )?prossimo mese)\b/g;
+
 type PayloadOf<T extends ActionPayload["type"]> = Extract<ActionPayload, { type: T }>;
+
+/** Controparte che risulta cliente dello studio. */
+interface Conflict {
+  /** Nome della controparte come indicato nella conversazione. */
+  counterpart: string;
+  client: ClientMatch;
+  matterNumbers: string[];
+}
 
 interface ActionContext {
   participants: ProposalParticipant[];
+  /** Candidati deboli (es. stesso cognome) dei clienti non collegati: mai collegati in automatico. */
+  clientCandidates: ClientMatch[];
+  conflicts: Conflict[];
+  caseManagement: CaseManagement;
   segments: Segment[];
   timeZone: string;
   now: Date;
@@ -103,17 +135,31 @@ function quoteFound(quote: string, text: string, nextText: string | undefined): 
 
 export async function buildProposal(args: BuildProposalArgs): Promise<Proposal> {
   const { recording, extraction, studio, caseManagement, extractor, now } = args;
-  const participants = await Promise.all(
-    extraction.participants.map((p) => toProposalParticipant(p, recording.segments, caseManagement)),
-  );
-  const ctx: ActionContext = { participants, segments: recording.segments, timeZone: studio.timezone, now };
+  const matches = await Promise.all(extraction.participants.map((p) => matchParticipant(p, caseManagement)));
+  const participants: ProposalParticipant[] = extraction.participants.map((p, i) => ({
+    ...p,
+    evidence: resolveEvidence(p.evidence, recording.segments),
+    clientMatch: matches[i]?.match ?? null,
+  }));
+  const ctx: ActionContext = {
+    participants,
+    clientCandidates: matches.flatMap((m) => (m.candidate === null ? [] : [m.candidate])),
+    conflicts: await findConflicts(extraction, participants, caseManagement),
+    caseManagement,
+    segments: recording.segments,
+    timeZone: studio.timezone,
+    now,
+  };
 
-  const modelActions = extraction.actions.map((action, i) => toProposedAction(action, `a${i + 1}`, ctx));
+  const modelActions = await Promise.all(
+    extraction.actions.map((action, i) => toProposedAction(action, `a${i + 1}`, ctx)),
+  );
   const actions = [...modelActions, transcriptAction(`a${modelActions.length + 1}`, studio)];
 
   const colleagueWarning = colleagueWarningFor(extraction);
   const warnings: Warning[] = [];
   if (colleagueWarning !== null) warnings.push(colleagueWarning);
+  warnings.push(...ctx.conflicts.map(conflictWarning));
   if (extraction.actions.length === 0) {
     warnings.push(warning("NESSUNA_AZIONE", "info", "Dalla conversazione non sono emerse azioni da proporre."));
   }
@@ -142,35 +188,73 @@ export async function buildProposal(args: BuildProposalArgs): Promise<Proposal> 
   };
 }
 
-async function toProposalParticipant(
+/**
+ * Collegamento al gestionale: automatico solo sopra la soglia sicura; una
+ * corrispondenza debole di un cliente (es. solo il cognome) resta un candidato.
+ */
+async function matchParticipant(
   participant: ExtractedParticipant,
-  segments: Segment[],
   caseManagement: CaseManagement,
-): Promise<ProposalParticipant> {
-  return {
-    ...participant,
-    evidence: resolveEvidence(participant.evidence, segments),
-    clientMatch: await findClientMatch(participant, caseManagement),
-  };
+): Promise<{ match: ClientMatch | null; candidate: ClientMatch | null }> {
+  const none = { match: null, candidate: null };
+  if (!MATCHABLE_ROLES.has(participant.role)) return none;
+  const query = participantQuery(participant);
+  if (query === null) return none;
+  const matches = await caseManagement.findClients(query);
+  const match = linkableMatch(matches);
+  if (match !== null) return { match, candidate: null };
+  const best = strongestMatch(matches);
+  const candidate =
+    CLIENT_ROLES.has(participant.role) && best !== null && best.score >= CLIENT_CANDIDATE_MIN_SCORE ? best : null;
+  return { match: null, candidate };
 }
 
-async function findClientMatch(
-  participant: ExtractedParticipant,
-  caseManagement: CaseManagement,
-): Promise<ClientMatch | null> {
-  if (!MATCHABLE_ROLES.has(participant.role)) return null;
+function participantQuery(participant: ExtractedParticipant): ClientQuery | null {
   const { name, email, phone, organization } = participant;
   if (name === null && email === null && phone === null && organization === null) return null;
-  const matches = await caseManagement.findClients({ name, email, phone, organization });
-  const best = matches.reduce<ClientMatch | null>((top, m) => (top === null || m.score > top.score ? m : top), null);
-  return best !== null && best.score >= CLIENT_MATCH_MIN_SCORE ? best : null;
+  return { name, email, phone, organization };
 }
 
-function toProposedAction(action: ExtractedAction, id: string, ctx: ActionContext): ProposedAction {
+/**
+ * Art. 24 CDF: controparti (partecipanti con quel ruolo e controparti degli
+ * incarichi) che risultano clienti dello studio. Basta lo stesso cognome:
+ * meglio un controllo in più che un conflitto non visto.
+ */
+async function findConflicts(
+  extraction: Extraction,
+  participants: ProposalParticipant[],
+  caseManagement: CaseManagement,
+): Promise<Conflict[]> {
+  const ownClients = new Set(
+    participants.flatMap((p) => (CLIENT_ROLES.has(p.role) && p.clientMatch !== null ? [p.clientMatch.clientId] : [])),
+  );
+  const counterparts: Array<{ label: string; query: ClientQuery }> = [
+    ...extraction.participants.flatMap((p) => {
+      const label = p.organization ?? p.name;
+      const query = participantQuery(p);
+      return p.role === "controparte" && label !== null && query !== null ? [{ label, query }] : [];
+    }),
+    ...extraction.actions.flatMap((a) =>
+      a.type === "incarico" && a.counterpart?.trim() ? [{ label: a.counterpart.trim(), query: { name: a.counterpart } }] : [],
+    ),
+  ];
+  const conflicts: Conflict[] = [];
+  for (const { label, query } of counterparts) {
+    for (const client of await caseManagement.findClients(query)) {
+      if (client.score < CLIENT_CANDIDATE_MIN_SCORE || ownClients.has(client.clientId)) continue;
+      if (conflicts.some((c) => c.client.clientId === client.clientId)) continue;
+      const matters = await caseManagement.listMatters(client.clientId);
+      conflicts.push({ counterpart: label, client, matterNumbers: matters.map((m) => m.number) });
+    }
+  }
+  return conflicts;
+}
+
+async function toProposedAction(action: ExtractedAction, id: string, ctx: ActionContext): Promise<ProposedAction> {
   const { confidence: rawConfidence, evidence: rawEvidence, rationale, ...extracted } = action;
   const confidence = clamp01(rawConfidence);
   const evidence = resolveEvidence(rawEvidence, ctx.segments);
-  const { payload, warnings: typeWarnings } = checkPayload(extracted, ctx);
+  const { payload, warnings: typeWarnings } = await checkPayload(extracted, ctx);
 
   const warnings: Warning[] = [];
   if (!evidence.some((e) => e.verified)) {
@@ -195,6 +279,7 @@ function toProposedAction(action: ExtractedAction, id: string, ctx: ActionContex
     );
   }
 
+  const minConfidence = payload.type === "email" ? PRESELECT_MIN_CONFIDENCE_EMAIL : PRESELECT_MIN_CONFIDENCE;
   return {
     id,
     origin: "modello",
@@ -202,7 +287,7 @@ function toProposedAction(action: ExtractedAction, id: string, ctx: ActionContex
     confidence,
     evidence,
     rationale,
-    preselected: confidence >= PRESELECT_MIN_CONFIDENCE && !warnings.some(isBlocking),
+    preselected: confidence >= minConfidence && !warnings.some(blocksPreselection),
     warnings,
   };
 }
@@ -224,7 +309,10 @@ function transcriptAction(id: string, studio: StudioProfile): ProposedAction {
 // Controlli per tipo di azione
 // ---------------------------------------------------------------------------
 
-function checkPayload(payload: ActionPayload, ctx: ActionContext): { payload: ActionPayload; warnings: Warning[] } {
+async function checkPayload(
+  payload: ActionPayload,
+  ctx: ActionContext,
+): Promise<{ payload: ActionPayload; warnings: Warning[] }> {
   switch (payload.type) {
     case "appuntamento":
       return { payload, warnings: appointmentWarnings(payload, ctx) };
@@ -234,9 +322,9 @@ function checkPayload(payload: ActionPayload, ctx: ActionContext): { payload: Ac
     case "attivita":
       return { payload, warnings: dueDateWarnings(payload.dueDate) };
     case "email":
-      return completeEmail(payload, ctx.participants);
+      return checkEmail(payload, ctx.participants);
     case "incarico":
-      return { payload, warnings: engagementWarnings(ctx.participants) };
+      return { payload, warnings: await engagementWarnings(payload, ctx) };
     case "accordo_economico":
     case "invio_trascrizione":
       return { payload, warnings: [] };
@@ -312,7 +400,9 @@ function deadlineWarnings(p: PayloadOf<"scadenza">, ctx: ActionContext): Warning
       warning(
         "TERMINE_DA_VERIFICARE",
         "attenzione",
-        "Termine calcolato automaticamente: verificarlo sul fascicolo e sul codice prima di farvi affidamento.",
+        p.computation === null
+          ? "Data riferita nella conversazione (per esempio un'udienza già fissata): verificarla sul fascicolo. In calendario l'evento è segnato come da verificare."
+          : "Termine calcolato automaticamente: verificarlo sul fascicolo e sul codice prima di farvi affidamento. In calendario l'evento è segnato come da verificare.",
       ),
     );
   }
@@ -324,25 +414,96 @@ function dueDateWarnings(dueDate: string | null): Warning[] {
   return [warning("DATA_NON_VALIDA", "info", `Data di scadenza non valida («${dueDate}»): correggerla se necessario.`)];
 }
 
-function engagementWarnings(participants: ProposalParticipant[]): Warning[] {
-  const clientKnown = participants.some((p) => CLIENT_ROLES.has(p.role) && p.clientMatch !== null);
-  if (clientKnown) return [];
-  return [
+/**
+ * Cliente dell'incarico risolto come all'esecuzione: il nome indicato prevale
+ * sul collegamento del partecipante, se non è compatibile con esso.
+ */
+async function engagementWarnings(p: PayloadOf<"incarico">, ctx: ActionContext): Promise<Warning[]> {
+  const out = ctx.conflicts.map(conflictWarning);
+  const linked = linkedClient(ctx.participants);
+  const name = p.clientName?.trim();
+  const byName = name ? await ctx.caseManagement.findClients({ name }) : [];
+  const client = name ? clientForName(byName, linked) : linked;
+  if (client !== null) return out;
+  const candidates = uniqueClients([
+    ...byName.filter((m) => m.score >= CLIENT_CANDIDATE_MIN_SCORE),
+    ...ctx.clientCandidates,
+  ]);
+  if (candidates.length > 0) {
+    const names = candidates.map((c) => c.displayName).join(", ");
+    out.push(
+      warning(
+        "CLIENTE_DA_VERIFICARE",
+        "attenzione",
+        `Nel gestionale risulta un cliente con nome simile (${names}), non collegato in automatico. ` +
+          "Se si tratta della stessa persona, indicarne nome e cognome nel campo «Cliente»; altrimenti, " +
+          "all'approvazione verrà creata una nuova anagrafica.",
+      ),
+    );
+    return out;
+  }
+  out.push(
     warning(
       "CLIENTE_NON_TROVATO",
       "info",
       "Il cliente non risulta nel gestionale: all'approvazione verrà creata una nuova anagrafica.",
     ),
-  ];
+  );
+  return out;
 }
 
-/** Completa l'indirizzo del destinatario dal gestionale quando non è stato detto in chiamata. */
-function completeEmail(
+/** Il cliente collegato con il punteggio più alto tra i partecipanti clienti. */
+function linkedClient(participants: ProposalParticipant[]): ClientMatch | null {
+  return strongestMatch(
+    participants.flatMap((p) =>
+      CLIENT_ROLES.has(p.role) && p.clientMatch !== null && p.clientMatch.score >= CLIENT_LINK_MIN_SCORE
+        ? [p.clientMatch]
+        : [],
+    ),
+  );
+}
+
+function uniqueClients(matches: ClientMatch[]): ClientMatch[] {
+  return matches.filter((m, i) => matches.findIndex((x) => x.clientId === m.clientId) === i);
+}
+
+function checkEmail(
   p: PayloadOf<"email">,
   participants: ProposalParticipant[],
 ): { payload: ActionPayload; warnings: Warning[] } {
+  const { payload, warnings } = completeRecipient(p, participants);
+  if (p.recipientRole === "controparte") {
+    warnings.push(
+      warning(
+        "CONTROPARTE_DIRETTA",
+        "attenzione",
+        "Comunicazione diretta alla controparte: se è assistita da un collega, l'art. 41 del Codice deontologico " +
+          "forense consente di scriverle solo per richiedere comportamenti determinati, intimare messe in mora o " +
+          "evitare prescrizioni o decadenze, sempre con copia al collega. Verificare prima dell'invio.",
+      ),
+    );
+  }
+  const relative = relativeTimeWords(p.body);
+  if (relative.length > 0) {
+    warnings.push(
+      warning(
+        "RIFERIMENTO_TEMPORALE",
+        "info",
+        `Il testo contiene riferimenti temporali relativi (${relative.map((w) => `«${w}»`).join(", ")}): ` +
+          "se l'email viene inviata in un giorno diverso da quello della conversazione, sostituirli con le date.",
+      ),
+    );
+  }
+  return { payload, warnings };
+}
+
+/** Completa l'indirizzo del destinatario dal gestionale quando non è stato detto in chiamata. */
+function completeRecipient(
+  p: PayloadOf<"email">,
+  participants: ProposalParticipant[],
+): { payload: PayloadOf<"email">; warnings: Warning[] } {
   if (p.recipientEmail !== null && p.recipientEmail.trim() !== "") return { payload: p, warnings: [] };
-  const email = recipientEmailFromCaseManagement(p, participants);
+  const email = clientEmailFor(p, participants);
   if (email !== null) return { payload: { ...p, recipientEmail: email }, warnings: [] };
   return {
     payload: { ...p, recipientEmail: null },
@@ -352,27 +513,24 @@ function completeEmail(
   };
 }
 
-function recipientEmailFromCaseManagement(p: PayloadOf<"email">, participants: ProposalParticipant[]): string | null {
-  const recipient = p.recipientName === null ? "" : normalizeForMatch(p.recipientName);
-  if (recipient !== "") {
-    const byName = participants.find(
-      (x) => x.clientMatch?.email && [x.name, x.clientMatch.displayName].some((n) => namesMatch(recipient, n)),
-    );
-    if (byName?.clientMatch?.email) return byName.clientMatch.email;
-  }
-  if (CLIENT_ROLES.has(p.recipientRole)) {
-    const matched = participants.filter((x) => CLIENT_ROLES.has(x.role) && x.clientMatch !== null);
-    const only = matched.length === 1 ? matched[0] : undefined;
-    if (only?.clientMatch?.email) return only.clientMatch.email;
-  }
-  return null;
+/**
+ * Indirizzo dal gestionale solo per le email al cliente: il destinatario deve
+ * essere un cliente collegato, riconosciuto per nome a parole intere
+ * («Dott. Grossi» non è «Rossi»). Senza nome vale l'unico cliente collegato.
+ */
+function clientEmailFor(p: PayloadOf<"email">, participants: ProposalParticipant[]): string | null {
+  if (!CLIENT_ROLES.has(p.recipientRole)) return null;
+  const linked = participants.filter((x) => CLIENT_ROLES.has(x.role) && x.clientMatch?.email);
+  const named = p.recipientName?.trim()
+    ? linked.filter((x) => [x.name, x.clientMatch?.displayName].some((n) => nameIncludes(n, p.recipientName)))
+    : linked;
+  const emails = [...new Set(named.flatMap((x) => (x.clientMatch?.email ? [x.clientMatch.email] : [])))];
+  return emails.length === 1 ? (emails[0] ?? null) : null;
 }
 
-/** Contenimento reciproco dei nomi normalizzati. */
-function namesMatch(normalizedRecipient: string, name: string | null): boolean {
-  if (name === null) return false;
-  const candidate = normalizeForMatch(name);
-  return candidate !== "" && (candidate.includes(normalizedRecipient) || normalizedRecipient.includes(candidate));
+/** Parole come «oggi» o «questa mattina» presenti nel testo, senza ripetizioni. */
+function relativeTimeWords(body: string): string[] {
+  return [...new Set(normalizeForMatch(body).match(RELATIVE_TIME) ?? [])];
 }
 
 // ---------------------------------------------------------------------------
@@ -385,34 +543,63 @@ function namesMatch(normalizedRecipient: string, name: string | null): boolean {
  */
 function colleagueWarningFor(extraction: Extraction): Warning | null {
   const withColleague = extraction.participants.some((p) => p.role === "collega_avvocato" && p.isSpeaker);
-  return withColleague ? warning("COLLEGA_ART38", "bloccante", colleagueMessage(extraction.conversationType)) : null;
+  if (!withColleague) return null;
+  const oneToOne = extraction.participants.filter((p) => p.isSpeaker).length <= 2;
+  return warning("COLLEGA_ART38", "bloccante", colleagueMessage(extraction.conversationType, oneToOne));
 }
 
 const CDF_ARTICLE = "art. 38, comma 2, del Codice deontologico forense";
+const SPEAKERPHONE_NOTE =
+  "Se il collega partecipava al telefono o in vivavoce, vale il divieto previsto per le conversazioni telefoniche; " +
+  "anche far ascoltare la telefonata a terzi in vivavoce senza avvisare il collega ha rilievo disciplinare " +
+  "(CNF, sentenza n. 7 del 2016).";
+const NOT_PRESELECTED = "Nessuna azione è stata preselezionata.";
 
-function colleagueMessage(type: ConversationType): string {
+function colleagueMessage(type: ConversationType, oneToOne: boolean): string {
+  const phoneBan = `l'${CDF_ARTICLE} vieta di registrare una conversazione telefonica con un collega`;
   switch (type) {
     case "telefonata":
-      return (
-        `Conversazione telefonica con un collega: l'${CDF_ARTICLE} vieta di registrare ` +
-        "una conversazione telefonica con un collega. Valutare la cancellazione della registrazione; " +
-        "nessuna azione è stata preselezionata."
-      );
-    case "riunione_in_presenza":
+      return `Conversazione telefonica con un collega: ${phoneBan}. Valutare la cancellazione della registrazione. ${NOT_PRESELECTED}`;
     case "videochiamata":
-      return (
-        "Riunione con un collega: la registrazione è consentita solo con il consenso di tutti i presenti " +
-        `(${CDF_ARTICLE}). Verificare il consenso prima di utilizzarla; ` +
-        "nessuna azione è stata preselezionata."
-      );
+      if (oneToOne) {
+        return (
+          "Videochiamata a due con un collega: in via prudenziale va trattata come una conversazione telefonica, " +
+          `e ${phoneBan}. Valutare la cancellazione della registrazione. ${NOT_PRESELECTED}`
+        );
+      }
+      return meetingMessage("Videochiamata");
+    case "riunione_in_presenza":
+      return meetingMessage("Riunione");
     case "non_determinabile":
       return (
-        `Conversazione con un collega: l'${CDF_ARTICLE} vieta di registrare una ` +
-        "conversazione telefonica con un collega e consente la registrazione di una riunione solo con il consenso " +
-        "di tutti i presenti. Verificare il tipo di conversazione e il consenso; valutare la cancellazione della " +
-        "registrazione. Nessuna azione è stata preselezionata."
+        `Conversazione con un collega: ${phoneBan} e consente la registrazione di una riunione solo con il consenso ` +
+        `di tutti i presenti. ${SPEAKERPHONE_NOTE} Verificare il tipo di conversazione e il consenso; valutare la ` +
+        `cancellazione della registrazione. ${NOT_PRESELECTED}`
       );
   }
+}
+
+function meetingMessage(kind: "Riunione" | "Videochiamata"): string {
+  return (
+    `${kind} con un collega: la registrazione è consentita solo con il consenso di tutti i presenti ` +
+    `(${CDF_ARTICLE}). ${SPEAKERPHONE_NOTE} Verificare il consenso e le modalità di partecipazione prima di ` +
+    `utilizzarla. ${NOT_PRESELECTED}`
+  );
+}
+
+function conflictWarning(conflict: Conflict): Warning {
+  const { matterNumbers } = conflict;
+  const matters =
+    matterNumbers.length === 0
+      ? ""
+      : ` (${matterNumbers.length === 1 ? "pratica" : "pratiche"} ${matterNumbers.join(", ")})`;
+  return warning(
+    "CONFLITTO_INTERESSI",
+    "attenzione",
+    `Possibile conflitto di interessi (art. 24 del Codice deontologico forense): la controparte ` +
+      `«${conflict.counterpart}» potrebbe corrispondere a ${conflict.client.displayName}, cliente dello studio${matters}. ` +
+      "Verificare prima di accettare l'incarico.",
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -423,8 +610,8 @@ function warning(code: WarningCode, severity: Warning["severity"], message: stri
   return { code, severity, message };
 }
 
-function isBlocking(w: Warning): boolean {
-  return w.severity === "attenzione" || w.severity === "bloccante";
+function blocksPreselection(w: Warning): boolean {
+  return (w.severity === "attenzione" || w.severity === "bloccante") && !NON_GATING_WARNINGS.has(w.code);
 }
 
 function clamp01(value: number): number {

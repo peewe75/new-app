@@ -16,6 +16,7 @@ import {
 import type {
   ActionPayload,
   Client,
+  ClientMatch,
   ExecutionArtifact,
   ExecutionResult,
   Matter,
@@ -24,7 +25,13 @@ import type {
   ProposedAction,
   StudioProfile,
 } from "../domain/types.js";
-import type { ClientQuery } from "../enrich/case-management.js";
+import {
+  CLIENT_LINK_MIN_SCORE,
+  clientForName,
+  linkableMatch,
+  namesCompatible,
+  strongestMatch,
+} from "../enrich/client-link.js";
 import { writeFileAtomic } from "../store/json-store.js";
 import { buildEml, isEmailAddress, type EmlAddress } from "./eml.js";
 import type { ActionExecutor, ExecutionContext } from "./executor.js";
@@ -49,7 +56,6 @@ interface Outcome {
 }
 
 const CLIENT_ROLES: ReadonlySet<ParticipantRole> = new Set(["cliente", "potenziale_cliente"]);
-const CLIENT_MATCH_MIN_SCORE = 0.6;
 const DEFAULT_APPOINTMENT_MINUTES = 60;
 const APPOINTMENT_ALARMS = [1440, 60];
 const DEADLINE_ALARMS = [10080, 1440];
@@ -102,7 +108,8 @@ async function executeAppointment(
   p: PayloadOf<"appuntamento">,
   ctx: ExecutionContext,
 ): Promise<Outcome> {
-  if (p.status === "da_fissare") return schedulingDraft(action, p, ctx);
+  // Una data e ora indicate (anche dall'avvocato) prevalgono sullo stato «da fissare».
+  if (p.start === null && p.status === "da_fissare") return schedulingDraft(action, p, ctx);
   if (p.start === null || !isLocalDateTime(p.start)) {
     return failure("Data e ora dell'appuntamento mancanti o non valide: indicarle e approvare di nuovo.");
   }
@@ -151,19 +158,34 @@ function modeLocation(mode: PayloadOf<"appuntamento">["mode"], studio: StudioPro
   }
 }
 
-/** Bozza al cliente per concordare data e ora di un appuntamento da fissare. */
+/**
+ * Appuntamento da fissare: bozza al cliente per concordare data e ora, salvo
+ * che lo faccia già un'email approvata allo stesso cliente o che il cliente non
+ * sia tra i partecipanti. In quei casi l'azione resta da completare con la data.
+ */
 async function schedulingDraft(
   action: ProposedAction,
   p: PayloadOf<"appuntamento">,
   ctx: ExecutionContext,
 ): Promise<Outcome> {
+  const covering = coveringClientEmail(ctx);
+  if (covering !== null) {
+    return skipped(
+      `Nessuna bozza separata: la richiesta di fissare l'appuntamento è nell'email «${covering.subject}». ` +
+        `${SCHEDULE_LATER}`,
+    );
+  }
+  const clients = clientParticipants(ctx.proposal.participants);
+  if (!involvesClient(p, clients)) {
+    return skipped(`Il cliente non partecipa all'appuntamento: nessuna bozza al cliente. ${SCHEDULE_LATER}`);
+  }
   const recipient = clientRecipient(ctx.proposal.participants);
-  const greetingName = recipient?.name ?? clientParticipants(ctx.proposal.participants).find((x) => x.name)?.name;
-  const subject = `Fissazione appuntamento – ${p.title}`;
+  const greetingName = recipient?.name ?? clients.find((x) => x.name)?.name;
+  const subject = SCHEDULING_SUBJECTS[p.mode ?? "altro"];
   const text = [
     `Gentile ${greetingName ?? "Cliente"},`,
     "",
-    `facendo seguito ${conversationReference(ctx)}, Le scrivo per fissare l'appuntamento concordato (${p.title}).`,
+    `facendo seguito ${conversationReference(ctx)}, Le scrivo per fissare l'appuntamento di cui abbiamo parlato.`,
     ...modeSentence(p),
     ctx.studio.bookingLink
       ? `Per Sua comodità, può scegliere data e ora qui: ${ctx.studio.bookingLink}`
@@ -181,6 +203,41 @@ async function schedulingDraft(
       ? "Bozza email per fissare l'appuntamento creata senza destinatario: aggiungerlo prima dell'invio."
       : `Bozza email per fissare l'appuntamento creata (destinatario: ${recipient.name ?? recipient.email}).`,
     [{ kind: "eml", label: `Bozza email: ${subject}`, path, ref: null }],
+  );
+}
+
+const SCHEDULE_LATER =
+  "Quando la data sarà concordata, indicarla nel campo «Data e ora» e approvare di nuovo per creare l'evento.";
+
+/** Oggetto neutro: niente titolo interno né materia della pratica. */
+const SCHEDULING_SUBJECTS: Record<NonNullable<PayloadOf<"appuntamento">["mode"]>, string> = {
+  in_studio: "Appuntamento presso lo studio",
+  telefonico: "Appuntamento telefonico",
+  videochiamata: "Appuntamento in videochiamata",
+  altro: "Appuntamento",
+};
+
+/**
+ * Email al cliente, approvata ora o già eseguita, che parla dell'appuntamento
+ * (o contiene il link di prenotazione): rende superflua una seconda bozza.
+ */
+function coveringClientEmail(ctx: ExecutionContext): PayloadOf<"email"> | null {
+  const done = new Set(ctx.proposal.executions.filter((e) => e.status === "ok").map((e) => e.actionId));
+  for (const a of ctx.proposal.actions) {
+    if (a.payload.type !== "email" || !CLIENT_ROLES.has(a.payload.recipientRole)) continue;
+    if (!ctx.approvedActionIds.has(a.id) && !done.has(a.id)) continue;
+    const body = normalizeForComparison(a.payload.body);
+    const mentionsBooking = ctx.studio.bookingLink !== null && a.payload.body.includes(ctx.studio.bookingLink);
+    if (mentionsBooking || /\b(?:appuntament|incontr)/.test(body)) return a.payload;
+  }
+  return null;
+}
+
+/** Senza partecipanti indicati l'appuntamento si intende con il cliente. */
+function involvesClient(p: PayloadOf<"appuntamento">, clients: ProposalParticipant[]): boolean {
+  if (p.participants.length === 0) return clients.length > 0;
+  return p.participants.some((name) =>
+    clients.some((c) => [c.name, c.clientMatch?.displayName].some((own) => namesCompatible(own, name))),
   );
 }
 
@@ -214,12 +271,13 @@ function modeSentence(p: PayloadOf<"appuntamento">): string[] {
 /** Destinatario: il cliente collegato al gestionale con l'email, altrimenti l'email detta in chiamata. */
 function clientRecipient(participants: ProposalParticipant[]): EmlAddress | null {
   const clients = clientParticipants(participants);
-  const matched = clients
-    .filter((x) => x.clientMatch?.email && isEmailAddress(x.clientMatch.email))
-    .sort((a, b) => (b.clientMatch?.score ?? 0) - (a.clientMatch?.score ?? 0))[0];
-  if (matched?.clientMatch?.email) {
-    return { name: matched.clientMatch.displayName, email: matched.clientMatch.email.trim() };
-  }
+  const matched = strongestMatch(
+    clients.flatMap((x) => {
+      const match = linkedMatch(x);
+      return match?.email && isEmailAddress(match.email) ? [match] : [];
+    }),
+  );
+  if (matched?.email) return { name: matched.displayName, email: matched.email.trim() };
   const spoken = clients.find((x) => x.email !== null && isEmailAddress(x.email));
   return spoken?.email ? { name: spoken.name, email: spoken.email.trim() } : null;
 }
@@ -239,13 +297,16 @@ async function executeDeadline(
   const start = p.time !== null && isLocalDateTime(`${p.date}T${p.time}`) ? `${p.date}T${p.time}` : null;
   const ics = buildIcsEvent({
     uid: eventUid(ctx, action),
-    title: `Scadenza: ${p.title}`,
+    // I termini processuali sono sempre da verificare: lo si vede anche dall'elenco del calendario.
+    title: `Scadenza: ${p.title}${p.kind === "processuale" ? " (da verificare)" : ""}`,
     description: [
       ...describeAction(p, ctx.studio.timezone).lines.slice(1),
-      "Termine calcolato automaticamente: verificare.",
+      verificationLine(p),
       `Registrazione: «${ctx.recording.title}»`,
       `Generato da Seguito dalla registrazione di ${recordingDateTime(ctx)}`,
-    ].join("\n"),
+    ]
+      .filter((line): line is string => line !== null)
+      .join("\n"),
     start,
     allDayDate: p.date,
     timezone: ctx.studio.timezone,
@@ -259,6 +320,11 @@ async function executeDeadline(
   return success(`Scadenza inserita nel calendario: ${when}.${ignoredTime}`, [
     { kind: "ics", label: `Scadenza: ${p.title}`, path, ref: null },
   ]);
+}
+
+function verificationLine(p: PayloadOf<"scadenza">): string | null {
+  if (p.computation !== null) return "Termine calcolato automaticamente: verificarne il calcolo.";
+  return p.kind === "processuale" ? "Data da verificare sul fascicolo." : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -353,7 +419,12 @@ async function executeCaseManagement(
   const messages: string[] = [];
   let client = await findClient(p, ctx);
   if (client === null) {
-    if (p.type !== "incarico") return failure("Cliente non individuato: collega la registrazione a un cliente");
+    if (p.type !== "incarico") {
+      return failure(
+        "Cliente non presente nel gestionale: approvare anche l'incarico (che crea l'anagrafica) " +
+          "oppure registrare la nota manualmente.",
+      );
+    }
     if (p.status === "non_conferito") {
       return skipped("Incarico non conferito e cliente non presente nel gestionale: nessuna registrazione effettuata.");
     }
@@ -391,31 +462,47 @@ async function executeCaseManagement(
   return success(messages.join(" "), artifacts);
 }
 
-/** Cliente: partecipante collegato al gestionale, poi ricerca per nome ed email. */
+/**
+ * Cliente dell'azione. Il nome indicato negli incarichi (eventualmente corretto
+ * dall'avvocato nel campo «Cliente») prevale sul collegamento del partecipante,
+ * che vale solo se compatibile con quel nome; per l'incarico, un nome senza
+ * corrispondenza sicura significa un cliente nuovo. Poi il partecipante
+ * collegato e infine la ricerca per nome, email e telefono.
+ */
 async function findClient(p: PayloadOf<CaseManagementType>, ctx: ExecutionContext): Promise<Client | null> {
   const cm = ctx.caseManagement;
   const clients = clientParticipants(ctx.proposal.participants);
-  const matched = clients
-    .filter((x) => x.clientMatch !== null)
-    .sort((a, b) => (b.clientMatch?.score ?? 0) - (a.clientMatch?.score ?? 0))[0];
-  if (matched?.clientMatch) {
-    const client = await cm.getClient(matched.clientMatch.clientId);
+  const linked = strongestMatch(clients.flatMap((x) => linkedMatch(x) ?? []));
+  for (const name of engagementClientNames(p, ctx)) {
+    const match = clientForName(await cm.findClients({ name }), linked);
+    const client = match === null ? null : await cm.getClient(match.clientId);
+    if (client !== null) return client;
+    if (p.type === "incarico") return null;
+  }
+  if (linked !== null) {
+    const client = await cm.getClient(linked.clientId);
     if (client !== null) return client;
   }
-  const queries: ClientQuery[] = [];
-  if (p.type === "incarico" && p.clientName?.trim()) queries.push({ name: p.clientName });
   // Il cliente può essere stato creato da un'azione precedente della stessa approvazione.
   for (const x of clients) {
-    if (x.name || x.email || x.phone) queries.push({ name: x.name, email: x.email, phone: x.phone });
-  }
-  for (const query of queries) {
-    const best = (await cm.findClients(query))[0];
-    if (best !== undefined && best.score >= CLIENT_MATCH_MIN_SCORE) {
-      const client = await cm.getClient(best.clientId);
-      if (client !== null) return client;
-    }
+    if (!x.name && !x.email && !x.phone) continue;
+    const match = linkableMatch(await cm.findClients({ name: x.name, email: x.email, phone: x.phone }));
+    const client = match === null ? null : await cm.getClient(match.clientId);
+    if (client !== null) return client;
   }
   return null;
+}
+
+/** Nome del cliente dell'incarico stesso, oppure quelli indicati negli incarichi della proposta. */
+function engagementClientNames(p: PayloadOf<CaseManagementType>, ctx: ExecutionContext): string[] {
+  const payloads = p.type === "incarico" ? [p] : ctx.proposal.actions.map((a) => a.payload);
+  return payloads.flatMap((x) => (x.type === "incarico" && x.clientName?.trim() ? [x.clientName.trim()] : []));
+}
+
+/** Collegamento al gestionale abbastanza sicuro da usare (esclude il solo cognome delle proposte meno recenti). */
+function linkedMatch(participant: ProposalParticipant): ClientMatch | null {
+  const match = participant.clientMatch;
+  return match !== null && match.score >= CLIENT_LINK_MIN_SCORE ? match : null;
 }
 
 async function createClientFor(p: PayloadOf<"incarico">, ctx: ExecutionContext): Promise<Client | null> {

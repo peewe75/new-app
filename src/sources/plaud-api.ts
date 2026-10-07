@@ -1,7 +1,8 @@
 /**
  * Fonte Plaud tramite API sviluppatori (stessi endpoint di @plaud-ai/cli).
  * I token sono quelli salvati da "npx @plaud-ai/cli login"; vengono rinnovati
- * quando stanno per scadere. Token e trascrizioni non sono mai registrati nei log.
+ * quando stanno per scadere e, una volta, quando Plaud rifiuta l'accesso (token
+ * senza scadenza nota o revocato). Token e trascrizioni non sono mai registrati nei log.
  */
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -11,6 +12,7 @@ import type { AppConfig } from "../config.js";
 import type { Recording, RecordingRef } from "../domain/types.js";
 import {
   discardBody,
+  type HostResolver,
   loadBlockContent,
   parsePlaudFile,
   PlaudApiError,
@@ -56,6 +58,8 @@ export interface PlaudApiSourceOptions {
   refreshUrl: string;
   region: string | null;
   fetchImpl?: typeof fetch;
+  /** Risoluzione dei nomi dei collegamenti `data_link` (sostituibile nei test). */
+  resolveHost?: HostResolver;
   now?: () => Date;
 }
 
@@ -66,9 +70,12 @@ export class PlaudApiSource implements RecordingSource {
   private readonly refreshUrl: string;
   private readonly region: string | null;
   private readonly fetchImpl: typeof fetch;
+  private readonly resolveHost: HostResolver | undefined;
   private readonly now: () => Date;
   /** Lettura/rinnovo del token in corso, condivisa dalle richieste concorrenti. */
   private pendingToken: Promise<string> | null = null;
+  /** Rinnovo forzato dopo un rifiuto, condiviso dalle richieste concorrenti. */
+  private pendingRenewal: Promise<string> | null = null;
 
   constructor(opts: PlaudApiSourceOptions) {
     this.apiBase = opts.apiBase.replace(/\/+$/, "");
@@ -76,6 +83,7 @@ export class PlaudApiSource implements RecordingSource {
     this.refreshUrl = opts.refreshUrl;
     this.region = opts.region;
     this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.resolveHost = opts.resolveHost;
     this.now = opts.now ?? (() => new Date());
   }
 
@@ -106,7 +114,11 @@ export class PlaudApiSource implements RecordingSource {
     if (!parsed.success) {
       throw new Error("Risposta di Plaud in un formato inatteso: impossibile leggere la registrazione.");
     }
-    const fetchLink = (url: string): Promise<string> => safeFetchText(url, { fetchImpl: this.fetchImpl });
+    const fetchLink = (url: string): Promise<string> =>
+      safeFetchText(url, {
+        fetchImpl: this.fetchImpl,
+        ...(this.resolveHost === undefined ? {} : { resolveHost: this.resolveHost }),
+      });
     return parsePlaudFile(parsed.data, (block) => loadBlockContent(block, fetchLink), this.now());
   }
 
@@ -122,20 +134,19 @@ export class PlaudApiSource implements RecordingSource {
     return parsed.data.data ?? [];
   }
 
-  /** GET autenticato; `what` descrive la risorsa nei messaggi d'errore. */
+  /**
+   * GET autenticato; `what` descrive la risorsa nei messaggi d'errore. Se Plaud
+   * rifiuta il token, lo rinnova una volta e ripete la richiesta.
+   */
   private async getJson(path: string, what: string): Promise<unknown> {
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${await this.accessToken()}`,
-      Accept: "application/json",
-    };
-    if (this.region) headers["x-pld-region"] = this.region;
-    const res = await plaudFetch(this.fetchImpl, `${this.apiBase}${path}`, {
-      headers,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    if (res.status === 401 || res.status === 403) {
+    let res = await this.authorizedGet(path, await this.accessToken());
+    if (isAuthRejection(res)) {
       discardBody(res);
-      throw new PlaudAuthError();
+      res = await this.authorizedGet(path, await this.renewedAccessToken());
+      if (isAuthRejection(res)) {
+        discardBody(res);
+        throw new PlaudAuthError();
+      }
     }
     if (!res.ok) {
       discardBody(res);
@@ -144,11 +155,30 @@ export class PlaudApiSource implements RecordingSource {
     return parseJson(await readBodyText(res), `Risposta di Plaud non valida per ${what}.`);
   }
 
+  private authorizedGet(path: string, token: string): Promise<Response> {
+    const headers: Record<string, string> = { Authorization: `Bearer ${token}`, Accept: "application/json" };
+    if (this.region) headers["x-pld-region"] = this.region;
+    return plaudFetch(this.fetchImpl, `${this.apiBase}${path}`, {
+      headers,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  }
+
   private accessToken(): Promise<string> {
     this.pendingToken ??= this.resolveAccessToken().finally(() => {
       this.pendingToken = null;
     });
     return this.pendingToken;
+  }
+
+  /** Token rinnovato con il refresh token salvato (PlaudAuthError se manca o è rifiutato). */
+  private renewedAccessToken(): Promise<string> {
+    this.pendingRenewal ??= this.readTokens()
+      .then((stored) => this.refresh(stored))
+      .finally(() => {
+        this.pendingRenewal = null;
+      });
+    return this.pendingRenewal;
   }
 
   private async resolveAccessToken(): Promise<string> {
@@ -215,6 +245,10 @@ export class PlaudApiSource implements RecordingSource {
     await saveTokens(this.tokensPath, next);
     return next.access_token;
   }
+}
+
+function isAuthRejection(res: Response): boolean {
+  return res.status === 401 || res.status === 403;
 }
 
 function parseJson(text: string, errorMessage: string): unknown {

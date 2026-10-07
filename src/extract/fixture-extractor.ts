@@ -20,7 +20,7 @@ export class FixtureExtractor implements Extractor {
   async extract(input: ExtractionInput): Promise<Extraction> {
     const { externalId } = input.recording;
     if (basename(externalId) !== externalId) {
-      throw new ExtractionError(`Identificativo di registrazione non valido: «${externalId}».`);
+      throw new ExtractionError(`Identificativo di registrazione non valido: «${externalId}».`, { retryable: false });
     }
     const file = join(this.dir, `${externalId}.extraction.json`);
     const raw = await this.readFixture(file, externalId);
@@ -28,12 +28,16 @@ export class FixtureExtractor implements Extractor {
     try {
       json = JSON.parse(raw);
     } catch (error) {
-      throw new ExtractionError(`Il file di analisi di esempio ${file} non contiene JSON valido.`, { cause: error });
+      throw new ExtractionError(`Il file di analisi di esempio ${file} non contiene JSON valido.`, {
+        cause: error,
+        retryable: false,
+      });
     }
     const parsed = ExtractionSchema.safeParse(json);
     if (!parsed.success) {
       throw new ExtractionError(`Il file di analisi di esempio ${file} non è conforme allo schema atteso.`, {
         cause: parsed.error,
+        retryable: false,
       });
     }
     return parsed.data;
@@ -47,10 +51,13 @@ export class FixtureExtractor implements Extractor {
         throw new ExtractionError(
           `Nessuna analisi di esempio per la registrazione «${externalId}» (${file}). ` +
             "Per l'analisi reale con Claude impostare la variabile ANTHROPIC_API_KEY.",
-          { cause: error },
+          { cause: error, retryable: false },
         );
       }
-      throw new ExtractionError(`Impossibile leggere il file di analisi di esempio ${file}.`, { cause: error });
+      throw new ExtractionError(`Impossibile leggere il file di analisi di esempio ${file}.`, {
+        cause: error,
+        retryable: false,
+      });
     }
   }
 }

@@ -157,6 +157,8 @@ describe("ClaudeExtractor", () => {
     const error = await extractionError(new ClaudeExtractor({ model: "m", effort: "high", client }).extract(input));
     expect(error.message).toContain("rifiutato");
     expect(error.message).toContain("cyber");
+    // Ripetere la stessa analisi darebbe lo stesso esito: niente nuovi tentativi automatici.
+    expect(error.retryable).toBe(false);
   });
 
   test("rifiuto senza categoria", async () => {
@@ -173,6 +175,7 @@ describe("ClaudeExtractor", () => {
     expect(error.message).toContain("troppo lunga");
     expect(error.message).toContain("8000");
     expect(error.message).toContain("SEGUITO_CLAUDE_MAX_TOKENS");
+    expect(error.retryable).toBe(false);
   });
 
   test("parsed_output nullo: errore di schema con la causa", async () => {
@@ -180,6 +183,7 @@ describe("ClaudeExtractor", () => {
     const error = await extractionError(new ClaudeExtractor({ model: "m", effort: "high", client }).extract(input));
     expect(error.message).toContain("non è conforme allo schema");
     expect(error.cause).toBeInstanceOf(Error);
+    expect(error.retryable).toBe(false);
   });
 
   test("risultato non conforme allo schema: rivalidato e respinto", async () => {
@@ -222,6 +226,7 @@ describe("ClaudeExtractor", () => {
         const error = await extractionError(extractor.extract(input));
         expect(error.message).toContain(fragment);
         expect(error.cause).toBe(sdkError);
+        expect(error.retryable).toBe(true);
       });
     }
 

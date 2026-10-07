@@ -67,6 +67,11 @@ export async function approveProposal(args: ApproveProposalArgs): Promise<Propos
   }
   const executed = new Set(proposal.executions.filter((e) => e.status === "ok").map((e) => e.actionId));
   const approved = validateSelection(proposal, request.actionIds);
+  if ([...approved].every((id) => executed.has(id))) {
+    throw new ApprovalValidationError(
+      "Le azioni selezionate sono già state eseguite: selezionarne almeno una ancora da eseguire.",
+    );
+  }
   const actions = applyEdits(proposal.actions, approved, executed, request.edits ?? {});
   const updated: Proposal = { ...structuredClone(proposal), actions };
 
@@ -77,6 +82,7 @@ export async function approveProposal(args: ApproveProposalArgs): Promise<Propos
     outboxDir: args.outboxDir,
     caseManagement: args.caseManagement,
     now,
+    approvedActionIds: approved,
   };
   const executors = args.executors ?? defaultExecutors();
   const results: ExecutionResult[] = [];
@@ -87,13 +93,19 @@ export async function approveProposal(args: ApproveProposalArgs): Promise<Propos
         : await runAction(action, executors, ctx),
     );
   }
-  const completed = results.every((r) => r.status === "ok" || r.status === "saltata");
+  const executions = [...updated.executions, ...results];
   return {
     ...updated,
-    executions: [...updated.executions, ...results],
+    executions,
     updatedAt: now.toISOString(),
-    status: completed ? "eseguita" : "eseguita_parzialmente",
+    status: hasUnresolvedErrors(executions) ? "eseguita_parzialmente" : "eseguita",
   };
+}
+
+/** Vera se un'azione è finita in errore, in questa o in una precedente approvazione, e non è mai riuscita. */
+function hasUnresolvedErrors(executions: ExecutionResult[]): boolean {
+  const succeeded = new Set(executions.filter((e) => e.status === "ok").map((e) => e.actionId));
+  return executions.some((e) => e.status === "errore" && !succeeded.has(e.actionId));
 }
 
 export function discardProposal(proposal: Proposal, now: Date): Proposal {
@@ -166,7 +178,40 @@ function editedPayload(action: ProposedAction, changes: Record<string, unknown>)
     const fields = [...new Set(parsed.error.issues.map((issue) => issue.path.map(String).join(".") || "dati"))];
     throw new ApprovalValidationError(`Valori non validi per l'azione ${label} nei campi: ${fields.join(", ")}.`);
   }
-  return parsed.data;
+  return reconcileEdits(action.payload, parsed.data, changes);
+}
+
+/**
+ * Coerenza dopo le modifiche dell'avvocato: un appuntamento da fissare a cui
+ * è stata data una data diventa fissato; una scadenza con la data corretta non
+ * porta più il calcolo originario, che resta nelle note come superato.
+ */
+function reconcileEdits(
+  original: ActionPayload,
+  edited: ActionPayload,
+  changes: Record<string, unknown>,
+): ActionPayload {
+  if (
+    original.type === "appuntamento" &&
+    edited.type === "appuntamento" &&
+    edited.status === "da_fissare" &&
+    !Object.hasOwn(changes, "status") &&
+    edited.start !== null &&
+    edited.start !== original.start
+  ) {
+    return { ...edited, status: "fissato" };
+  }
+  if (
+    original.type === "scadenza" &&
+    edited.type === "scadenza" &&
+    edited.date !== original.date &&
+    original.computation !== null &&
+    !Object.hasOwn(changes, "computation")
+  ) {
+    const note = `Data corretta dall'avvocato: il calcolo originario («${original.computation}») non è più valido.`;
+    return { ...edited, computation: null, notes: edited.notes ? `${edited.notes}\n${note}` : note };
+  }
+  return edited;
 }
 
 /** Prima gli incarichi: possono creare il cliente e la pratica usati dalle altre azioni. */

@@ -6,7 +6,7 @@
  * <dataDir>/proposals/<id codificato>.json, <dataDir>/checkpoints.json.
  */
 import { randomBytes } from "node:crypto";
-import { access, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, link, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { ProposalSchema, RecordingSchema, type Proposal, type Recording } from "../domain/types.js";
@@ -35,6 +35,30 @@ export async function writeFileAtomic(filePath: string, content: string): Promis
     await rm(tmp, { force: true });
     throw err;
   }
+}
+
+/**
+ * Crea il file solo se non esiste, in modo atomico anche tra processi diversi:
+ * file temporaneo completo, poi link sul nome finale (fallisce se esiste già).
+ * Restituisce false se il file esisteva.
+ */
+export async function writeFileIfAbsent(filePath: string, content: string): Promise<boolean> {
+  await mkdir(dirname(filePath), { recursive: true, mode: DIR_MODE });
+  const tmp = `${filePath}.${process.pid}-${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    await writeFile(tmp, content, { mode: FILE_MODE, flag: "wx" });
+    await link(tmp, filePath);
+    return true;
+  } catch (err) {
+    if (isAlreadyExistsError(err)) return false;
+    throw err;
+  } finally {
+    await rm(tmp, { force: true });
+  }
+}
+
+function isAlreadyExistsError(err: unknown): boolean {
+  return typeof err === "object" && err !== null && "code" in err && err.code === "EEXIST";
 }
 
 /**
@@ -99,6 +123,11 @@ export class JsonFileStore implements Store {
   async saveProposal(proposal: Proposal): Promise<void> {
     const valid = ProposalSchema.parse(proposal);
     await writeJson(this.proposalPath(valid.id), valid);
+  }
+
+  async createProposal(proposal: Proposal): Promise<boolean> {
+    const valid = ProposalSchema.parse(proposal);
+    return writeFileIfAbsent(this.proposalPath(valid.id), `${JSON.stringify(valid, null, 2)}\n`);
   }
 
   async getProposal(id: string): Promise<Proposal | null> {

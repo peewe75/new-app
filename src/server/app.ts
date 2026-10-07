@@ -2,13 +2,16 @@
  * Server HTTP di Seguito: API JSON delle proposte, download dei file generati
  * (outbox) e interfaccia web di approvazione. Solo `node:http`, nessun framework.
  *
- * Sicurezza: autenticazione HTTP Basic facoltativa su ogni rotta, intestazioni
- * restrittive (CSP senza script/stili inline), POST solo JSON e solo dalla stessa
- * origine, file dell'outbox serviti senza possibilità di uscire dalla cartella.
+ * Sicurezza: intestazione Host limitata agli indirizzi IP, a localhost e ai nomi
+ * autorizzati (contro il DNS rebinding), autenticazione HTTP Basic facoltativa su
+ * ogni rotta, intestazioni restrittive (CSP senza script/stili inline), POST solo
+ * JSON e solo dalla stessa origine, file dell'outbox serviti senza possibilità di
+ * uscire dalla cartella.
  */
 import { createHash, timingSafeEqual } from "node:crypto";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { isIP } from "node:net";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ApprovalRequestSchema, type ApprovalRequest, type Proposal, type StudioProfile } from "../domain/types.js";
@@ -21,6 +24,11 @@ export interface AppServices {
   outboxDir: string;
   /** Se impostata, ogni richiesta richiede l'autenticazione HTTP Basic. */
   password: string | null;
+  /**
+   * Nomi host accettati nell'intestazione Host oltre agli indirizzi IP e a
+   * localhost (difesa dal DNS rebinding), es. "seguito.studio.lan".
+   */
+  allowedHosts?: readonly string[];
   approve(proposalId: string, request: ApprovalRequest): Promise<Proposal>;
   discard(proposalId: string): Promise<Proposal>;
   /** Sincronizzazione con la fonte delle registrazioni; assente se non configurata. */
@@ -40,6 +48,8 @@ export interface ProposalSummary {
   preselectedCount: number;
   warningCodes: string[];
   hasBlocking: boolean;
+  /** Scadenze proposte e non ancora inserite in calendario. */
+  pendingDeadlines: number;
 }
 
 type SyncResult = Awaited<ReturnType<NonNullable<AppServices["sync"]>>>;
@@ -72,7 +82,9 @@ const SECURITY_HEADERS: Readonly<Record<string, string>> = {
 
 const MESSAGES = {
   badUrl: "Indirizzo della richiesta non valido.",
-  unauthorized: "Accesso riservato: inserisci la password di Seguito.",
+  badHost:
+    "Richiesta rifiutata: nome host non autorizzato. Per raggiungere Seguito con questo nome, aggiungerlo a SEGUITO_ALLOWED_HOSTS.",
+  unauthorized: "Accesso riservato: inserire la password di Seguito.",
   crossOrigin: "Richiesta rifiutata: proviene da un'origine diversa da Seguito.",
   notFound: "Risorsa non trovata.",
   proposalNotFound: "Proposta non trovata.",
@@ -80,15 +92,15 @@ const MESSAGES = {
   badFilePath: "Percorso del file non valido.",
   syncUnavailable: "La sincronizzazione delle registrazioni non è configurata.",
   methodNotAllowed: "Metodo non consentito per questo indirizzo.",
-  busy: "È già in corso un'operazione su questa proposta: attendi che sia completata.",
+  busy: "È già in corso un'operazione su questa proposta: attendere che sia completata.",
   tooLarge: "Il corpo della richiesta supera il limite di 1 MB.",
   notJson: "Le richieste POST devono avere Content-Type: application/json.",
   invalidJson: "Il corpo della richiesta non è un JSON valido.",
-  noActions: "Seleziona almeno un'azione da approvare.",
+  noActions: "Selezionare almeno un'azione da approvare.",
   aborted: "La richiesta è stata interrotta.",
   stateConflict: "Operazione non consentita nello stato attuale della proposta.",
   invalidApproval: "Richiesta di approvazione non valida.",
-  internal: "Si è verificato un errore interno. Riprova; se il problema persiste, controlla il registro del server.",
+  internal: "Si è verificato un errore interno. Riprovare; se il problema persiste, consultare il registro del server.",
 } as const;
 
 /** Errore con stato HTTP e messaggio (in italiano) mostrabile all'utente. */
@@ -111,6 +123,8 @@ interface Route {
 
 interface AppContext {
   services: AppServices;
+  /** Nomi host autorizzati (minuscoli), oltre a indirizzi IP e localhost. */
+  allowedHosts: ReadonlySet<string>;
   /** Esegue un'operazione in esclusiva sulla proposta (409 se ne è già in corso una). */
   exclusive<T>(proposalId: string, task: () => Promise<T>): Promise<T>;
   /** Sincronizzazione con le richieste concorrenti accorpate; null se non configurata. */
@@ -121,6 +135,7 @@ interface AppContext {
 export function createAppServer(services: AppServices): Server {
   const ctx: AppContext = {
     services,
+    allowedHosts: new Set((services.allowedHosts ?? []).map((host) => host.trim().toLowerCase())),
     exclusive: createExclusiveRunner(),
     sync: services.sync ? singleFlight(services.sync) : null,
   };
@@ -133,6 +148,7 @@ async function handleRequest(ctx: AppContext, req: IncomingMessage, res: ServerR
   try {
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
     res.setHeader("Cache-Control", "no-store");
+    assertAllowedHost(req.headers.host, ctx.allowedHosts);
     const password = ctx.services.password;
     if (password && !isAuthorized(req.headers.authorization, password)) {
       throw new HttpError(401, MESSAGES.unauthorized, { "WWW-Authenticate": 'Basic realm="Seguito", charset="UTF-8"' });
@@ -222,7 +238,13 @@ function summarize(proposal: Proposal): ProposalSummary {
     preselectedCount: proposal.actions.filter((action) => action.preselected).length,
     warningCodes: [...new Set(warnings.map((warning) => warning.code))],
     hasBlocking: warnings.some((warning) => warning.severity === "bloccante"),
+    pendingDeadlines: pendingDeadlines(proposal),
   };
+}
+
+function pendingDeadlines(proposal: Proposal): number {
+  const done = new Set(proposal.executions.filter((e) => e.status === "ok").map((e) => e.actionId));
+  return proposal.actions.filter((action) => action.payload.type === "scadenza" && !done.has(action.id)).length;
 }
 
 async function listProposals(ctx: AppContext, res: ServerResponse): Promise<void> {
@@ -304,6 +326,28 @@ function singleFlight<T>(task: () => Promise<T>): () => Promise<T> {
 // ---------------------------------------------------------------------------
 // Richieste in ingresso
 // ---------------------------------------------------------------------------
+
+/**
+ * DNS rebinding: una pagina esterna che fa risolvere il proprio nome in
+ * 127.0.0.1 arriva qui con il suo nome nell'intestazione Host. Si accettano
+ * solo indirizzi IP (la pagina avrebbe allora la stessa origine di Seguito),
+ * localhost e i nomi autorizzati.
+ */
+function assertAllowedHost(header: string | undefined, allowed: ReadonlySet<string>): void {
+  const hostname = hostnameOf(header);
+  if (hostname !== null && (isIP(hostname) !== 0 || hostname === "localhost" || allowed.has(hostname))) return;
+  throw new HttpError(403, MESSAGES.badHost);
+}
+
+/** "nome[:porta]" oppure "[IPv6][:porta]"; nient'altro (niente credenziali né percorsi). */
+const HOST_HEADER = /^(?:\[([0-9a-f:.]+)\]|([a-z0-9.-]+))(?::\d{1,5})?$/i;
+
+/** Nome host (minuscolo, IPv6 senza parentesi) dall'intestazione Host; null se assente o non valida. */
+function hostnameOf(header: string | undefined): string | null {
+  const match = HOST_HEADER.exec(header ?? "");
+  if (match === null) return null;
+  return (match[1] ?? match[2] ?? "").toLowerCase();
+}
 
 function isAuthorized(header: string | undefined, password: string): boolean {
   const match = /^Basic\s+([A-Za-z0-9+/=]+)\s*$/i.exec(header ?? "");

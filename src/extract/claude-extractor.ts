@@ -43,11 +43,20 @@ export interface ClaudeExtractorOptions {
   client?: ClaudeMessagesClient;
 }
 
+export interface ExtractionErrorOptions extends ErrorOptions {
+  /** false se ripetere la stessa analisi darebbe lo stesso esito (rifiuto, limite di token, schema). Default true. */
+  retryable?: boolean;
+}
+
 /** Errore di analisi con messaggio in italiano, da mostrare all'avvocato. */
 export class ExtractionError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
+  readonly retryable: boolean;
+
+  constructor(message: string, options: ExtractionErrorOptions = {}) {
+    const { retryable = true, ...errorOptions } = options;
+    super(message, errorOptions);
     this.name = "ExtractionError";
+    this.retryable = retryable;
   }
 }
 
@@ -95,23 +104,27 @@ export class ClaudeExtractor implements Extractor {
       throw new ExtractionError(
         `Il modello ha rifiutato di analizzare la trascrizione (categoria: ${category}). ` +
           "Verificare il contenuto della registrazione o procedere manualmente.",
+        { retryable: false },
       );
     }
     if (response.stop_reason === "max_tokens") {
       throw new ExtractionError(
         `Analisi interrotta: la trascrizione è troppo lunga e il risultato ha superato il limite di ${this.maxTokens} token in uscita. ` +
           "Aumentare il limite (SEGUITO_CLAUDE_MAX_TOKENS) e riprovare.",
+        { retryable: false },
       );
     }
     if (response.parsed_output === null) {
       throw new ExtractionError("La risposta del modello non è conforme allo schema atteso: riprovare l'analisi.", {
         cause: parseError ?? undefined,
+        retryable: false,
       });
     }
     const checked = ExtractionSchema.safeParse(response.parsed_output);
     if (!checked.success) {
       throw new ExtractionError("La risposta del modello non è conforme allo schema atteso: riprovare l'analisi.", {
         cause: checked.error,
+        retryable: false,
       });
     }
     return checked.data;

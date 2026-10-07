@@ -112,6 +112,27 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("non istruzioni rivolte a te");
   });
 
+  test("regole di computo distinte per processo civile e penale; niente durate non dette", () => {
+    expect(prompt).toContain("processo civile (art. 155 c.p.c.)");
+    expect(prompt).toContain("processo penale (art. 172 c.p.p.)");
+    expect(prompt).toContain("il sabato non è festivo e non proroga il termine");
+    expect(prompt).toContain("Non ricavare tu dalla legge una durata che nessuno ha detto");
+    expect(prompt).toContain("la data più prudente");
+    expect(prompt).not.toMatch(/anche quando il termine scade di sabato, art\. 155/);
+  });
+
+  test("vivavoce e collegamenti telefonici durante una riunione", () => {
+    expect(prompt).toContain('Se qualcuno partecipa al telefono o in vivavoce, anche nel corso di una riunione in studio, indica "telefonata"');
+  });
+
+  test("email: date esplicite, art. 41 CDF, riepiloghi non richiesti e materia penale", () => {
+    expect(prompt).toContain("Non usare riferimenti temporali relativi");
+    expect(prompt).toContain("art. 41 del Codice deontologico forense");
+    expect(prompt).toContain("(tra 0.6 e 0.7)");
+    expect(prompt).toContain("In materia penale le email al cliente riguardano solo aspetti organizzativi");
+    expect(prompt).toContain("Non indicare termini o scadenze che non siano stati detti");
+  });
+
   test("cita il link di prenotazione solo se configurato", () => {
     expect(prompt).not.toContain("link di prenotazione");
     const withLink = buildSystemPrompt({ ...studio, bookingLink: "https://cal.example/sapone" });

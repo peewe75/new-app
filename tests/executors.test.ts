@@ -214,8 +214,10 @@ afterEach(async () => {
   await rm(tmp, { recursive: true, force: true });
 });
 
-function context(p: Proposal, studio: StudioProfile = STUDIO): ExecutionContext {
-  return { proposal: p, recording: RECORDING, studio, outboxDir, caseManagement, now: NOW };
+/** Contesto di esecuzione; senza `approved` si intendono approvate tutte le azioni della proposta. */
+function context(p: Proposal, studio: StudioProfile = STUDIO, approved?: string[]): ExecutionContext {
+  const approvedActionIds = new Set(approved ?? p.actions.map((a) => a.id));
+  return { proposal: p, recording: RECORDING, studio, outboxDir, caseManagement, now: NOW, approvedActionIds };
 }
 
 async function run(a: ProposedAction, ctx: ExecutionContext): Promise<ExecutionResult> {
@@ -315,15 +317,20 @@ describe("appuntamenti", () => {
     const headers = emlHeaders(eml);
     expect(headers).toContain("To: Mario Rossi <mario.rossi@example.com>");
     expect(headers).toContain("X-Unsent: 1");
+    const subject = /^Subject: (.*)$/m.exec(headers)?.[1] ?? "";
+    expect(decodeHeader(subject)).toBe("Appuntamento presso lo studio");
     const text = emlText(eml);
     expect(text).toContain("Gentile Mario Rossi,");
-    expect(text).toContain("alla nostra telefonata di mercoledì 7 ottobre 2026");
+    expect(text).toContain(
+      "facendo seguito alla nostra telefonata di mercoledì 7 ottobre 2026, Le scrivo per fissare l'appuntamento di cui abbiamo parlato.",
+    );
+    expect(text).not.toContain("Appuntamento con Mario Rossi");
     expect(text).toContain("può scegliere data e ora qui: https://cal.example/sapone");
     expect(text.endsWith(STUDIO.signature)).toBe(true);
   });
 
   test("da fissare senza cliente collegato né link: chiede le disponibilità, nessun destinatario", async () => {
-    const a = action("a2", appointment({ status: "da_fissare", start: null, mode: "telefonico" }));
+    const a = action("a2", appointment({ status: "da_fissare", start: null, mode: "telefonico", participants: ["Paolo Verdi"] }));
     const verdi = participant({ name: "Paolo Verdi", role: "potenziale_cliente", email: "non è un indirizzo" });
     const result = await run(a, context(proposal([LAWYER, verdi], [a])));
     expect(result.status).toBe("ok");
@@ -337,10 +344,57 @@ describe("appuntamenti", () => {
   });
 
   test("da fissare: usa l'email detta in chiamata se il cliente non è nel gestionale", async () => {
-    const a = action("a2", appointment({ status: "da_fissare", start: null }));
+    const a = action("a2", appointment({ status: "da_fissare", start: null, participants: [] }));
     const verdi = participant({ name: "Paolo Verdi", role: "potenziale_cliente", email: "paolo.verdi@example.com" });
     const eml = await artifactText(await run(a, context(proposal([verdi], [a]))));
     expect(emlHeaders(eml)).toContain("To: Paolo Verdi <paolo.verdi@example.com>");
+  });
+});
+
+describe("appuntamenti da fissare", () => {
+  const toSchedule = (overrides: Partial<Payload<"appuntamento">> = {}) =>
+    appointment({ status: "da_fissare", start: null, ...overrides });
+  const clientEmail: Payload<"email"> = {
+    type: "email",
+    recipientName: "Mario Rossi",
+    recipientEmail: "mario.rossi@example.com",
+    recipientRole: "cliente",
+    subject: "Documenti e prenotazione del primo incontro",
+    body: "Gentile Sig. Rossi,\n\nper il primo incontro in studio può scegliere giorno e orario dal link.\n\nCordiali saluti.",
+    purpose: "Documenti e prenotazione",
+  };
+
+  test("con la data indicata dall'avvocato: evento .ics, nessuna bozza", async () => {
+    const a = action("a1", toSchedule({ start: "2026-10-20T15:00" }));
+    const result = await run(a, context(proposal([LAWYER, ROSSI], [a])));
+    expect(result.status).toBe("ok");
+    expect(result.artifacts.map((x) => x.kind)).toEqual(["ics"]);
+    expect(icsLines(await artifactText(result))).toContain("DTSTART:20261020T130000Z");
+  });
+
+  test("un'email approvata allo stesso cliente parla già dell'appuntamento: nessuna seconda bozza", async () => {
+    const a = action("a1", toSchedule());
+    const mail = action("a5", clientEmail);
+    const p = proposal([LAWYER, ROSSI], [a, mail]);
+    const result = await run(a, context(p, STUDIO, ["a1", "a5"]));
+    expect(result.status).toBe("saltata");
+    expect(result.message).toContain("«Documenti e prenotazione del primo incontro»");
+    expect(result.message).toContain("«Data e ora»");
+    expect(result.artifacts).toEqual([]);
+    await expect(readdir(outboxDir)).rejects.toThrow();
+
+    // Se l'email non è approvata, la bozza per fissare l'appuntamento serve.
+    const alone = await run(a, context(p, STUDIO, ["a1"]));
+    expect(alone.status).toBe("ok");
+    expect(alone.artifacts[0]?.kind).toBe("eml");
+  });
+
+  test("appuntamento con un terzo: nessuna bozza al cliente", async () => {
+    const a = action("a1", toSchedule({ participants: ["Geom. Luigi Bassi", "Avv. Vincenzo Sapone"] }));
+    const result = await run(a, context(proposal([LAWYER, ROSSI], [a])));
+    expect(result.status).toBe("saltata");
+    expect(result.message).toMatch(/^Il cliente non partecipa all'appuntamento/);
+    expect(result.artifacts).toEqual([]);
   });
 });
 
@@ -363,7 +417,7 @@ describe("scadenze", () => {
     expect(result.status).toBe("ok");
     expect(result.artifacts[0]?.path).toBe("plaud-demo-rossi/a3-opposizione-a-decreto-ingiuntivo.ics");
     const lines = icsLines(await artifactText(result));
-    expect(lines).toContain("SUMMARY:Scadenza: Opposizione a decreto ingiuntivo");
+    expect(lines).toContain("SUMMARY:Scadenza: Opposizione a decreto ingiuntivo (da verificare)");
     expect(lines).toContain("DTSTART;VALUE=DATE:20261111");
     expect(lines).toContain("DTEND;VALUE=DATE:20261112");
     expect(lines).toContain("TRIGGER:-P7D");
@@ -371,7 +425,24 @@ describe("scadenze", () => {
     const description = lines.find((l) => l.startsWith("DESCRIPTION:")) ?? "";
     expect(description).toContain("Riferimento normativo: art. 641 c.p.c.");
     expect(description).toContain("Calcolo: notifica 02/10/2026 + 40 giorni");
-    expect(description).toContain("Termine calcolato automaticamente: verificare.");
+    expect(description).toContain("Termine calcolato automaticamente: verificarne il calcolo.");
+  });
+
+  test("udienza già fissata: niente «calcolato automaticamente»; termini non processuali senza «da verificare»", async () => {
+    const hearing = await run(action("a3", deadline({ computation: null, title: "Udienza" })), context(proposal([ROSSI])));
+    const hearingLines = icsLines(await artifactText(hearing));
+    expect(hearingLines).toContain("SUMMARY:Scadenza: Udienza (da verificare)");
+    const description = hearingLines.find((l) => l.startsWith("DESCRIPTION:")) ?? "";
+    expect(description).toContain("Data da verificare sul fascicolo.");
+    expect(description).not.toContain("calcolato");
+
+    const contract = await run(
+      action("a4", deadline({ kind: "contrattuale", computation: null, legalBasis: null, title: "Pagamento" })),
+      context(proposal([ROSSI])),
+    );
+    const contractLines = icsLines(await artifactText(contract));
+    expect(contractLines).toContain("SUMMARY:Scadenza: Pagamento");
+    expect(contractLines.find((l) => l.startsWith("DESCRIPTION:"))).not.toMatch(/verificar/);
   });
 
   test("con orario valido diventa un evento con ora", async () => {
@@ -613,12 +684,44 @@ describe("gestionale", () => {
     expect(followUp.artifacts[0]?.label).toBe("Nota nella pratica 2026/005");
   });
 
-  test("cliente non individuato: errore per le azioni diverse dall'incarico", async () => {
+  test("cliente non individuato: errore per le azioni diverse dall'incarico, con l'indicazione di come procedere", async () => {
     const result = await run(action("a2", fee), context(proposal([LAWYER])));
     expect(result).toMatchObject({
       status: "errore",
-      message: "Cliente non individuato: collega la registrazione a un cliente",
+      message:
+        "Cliente non presente nel gestionale: approvare anche l'incarico (che crea l'anagrafica) " +
+        "oppure registrare la nota manualmente.",
     });
+  });
+
+  test("cliente corretto nel campo «Cliente»: prevale sul collegamento per solo cognome", async () => {
+    // Proposta meno recente: «Rossi» collegato a Mario Rossi per il solo cognome.
+    const mrsRossi = participant({
+      name: "Rossi",
+      role: "potenziale_cliente",
+      clientMatch: { ...(ROSSI.clientMatch as NonNullable<ProposalParticipant["clientMatch"]>), score: 0.6 },
+    });
+    const incarico = action("a1", engagement({ clientName: "Anna Rossi", subject: "Separazione giudiziale" }));
+    const accordo = action("a2", fee);
+    const p = proposal([LAWYER, mrsRossi], [incarico, accordo]);
+    const result = await run(incarico, context(p));
+    expect(result.status).toBe("ok");
+    expect(result.message).toMatch(/^Nuovo cliente Anna Rossi inserito nel gestionale\. Pratica 2026\/005 «Separazione giudiziale» aperta per Anna Rossi\./);
+    const followUp = await run(accordo, context(p));
+    expect(followUp.message).toBe("Nota registrata nella pratica 2026/005 (Anna Rossi).");
+    const data = await gestionale();
+    expect(data.matters.filter((m) => m.clientId === "C-0001").flatMap((m) => m.notes)).toEqual([]);
+  });
+
+  test("nome dell'incarico compatibile con il cliente collegato in modo sicuro: stesso cliente", async () => {
+    const byEmail = participant({
+      name: "Rossi",
+      role: "cliente",
+      clientMatch: { ...(ROSSI.clientMatch as NonNullable<ProposalParticipant["clientMatch"]>), score: 1, matchedOn: "email" },
+    });
+    const result = await run(action("a1", engagement({ clientName: "Sig. Rossi" })), context(proposal([byEmail])));
+    expect(result.message).toContain("aperta per Mario Rossi");
+    expect((await gestionale()).clients).toHaveLength(3);
   });
 
   test("omonimo con nome diverso: non collegato al cliente sbagliato", async () => {

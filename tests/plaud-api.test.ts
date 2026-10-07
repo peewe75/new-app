@@ -14,6 +14,19 @@ import {
 } from "../src/sources/plaud-parse.js";
 
 const API = "https://platform.plaud.example/developer/api";
+/** DNS finto: i nomi di prova sono pubblici, salvo quelli indicati. */
+const DNS: Record<string, string[]> = {
+  "cdn.plaud.example": ["93.184.216.34"],
+  localhost: ["127.0.0.1", "::1"],
+  "metadata.internal": ["169.254.169.254"],
+  "rebind.example": ["93.184.216.35", "10.0.0.7"],
+  "mapped.example": ["::ffff:192.168.1.1"],
+};
+const resolveHost = async (hostname: string): Promise<string[]> => {
+  const addresses = DNS[hostname];
+  if (addresses === undefined) throw Object.assign(new Error(`getaddrinfo ENOTFOUND ${hostname}`), { code: "ENOTFOUND" });
+  return addresses;
+};
 const REFRESH_URL = "https://platform.plaud.example/developer/api/oauth/third-party/access-token/refresh";
 const NOW = new Date("2026-10-07T08:00:00.000Z");
 
@@ -85,7 +98,15 @@ async function writeTokens(tokens: Record<string, unknown>): Promise<void> {
 }
 
 function source(fetchImpl: typeof fetch, region: string | null = null): PlaudApiSource {
-  return new PlaudApiSource({ apiBase: `${API}/`, tokensPath, refreshUrl: REFRESH_URL, region, fetchImpl, now: () => NOW });
+  return new PlaudApiSource({
+    apiBase: `${API}/`,
+    tokensPath,
+    refreshUrl: REFRESH_URL,
+    region,
+    fetchImpl,
+    resolveHost,
+    now: () => NOW,
+  });
 }
 
 const validTokens = { access_token: "tok-valid", refresh_token: "ref-1", token_type: "Bearer", expires_at: NOW.getTime() + 3_600_000 };
@@ -147,6 +168,35 @@ describe("PlaudApiSource: autenticazione", () => {
     await writeTokens(validTokens);
     const { fetchImpl } = fakeFetch(() => json({ error: "unauthorized" }, 401));
     await expect(source(fetchImpl).listRecent()).rejects.toBeInstanceOf(PlaudAuthError);
+  });
+
+  test("HTTP 401 con un token senza scadenza nota: rinnova una volta e ripete la richiesta", async () => {
+    await writeTokens({ access_token: "tok-revocato", refresh_token: "ref-1", token_type: "Bearer" });
+    const { fetchImpl, calls } = fakeFetch((call) => {
+      if (call.url === REFRESH_URL) return json({ access_token: "tok-nuovo" });
+      return call.headers.get("authorization") === "Bearer tok-nuovo" ? json(detail()) : json({ error: "unauthorized" }, 401);
+    });
+    const recording = await source(fetchImpl).fetchRecording("abc123");
+    expect(recording.externalId).toBe("abc123");
+    expect(calls.map((c) => (c.url === REFRESH_URL ? "rinnovo" : c.headers.get("authorization")))).toEqual([
+      "Bearer tok-revocato",
+      "rinnovo",
+      "Bearer tok-nuovo",
+    ]);
+    const saved = JSON.parse(await readFile(tokensPath, "utf8")) as Record<string, unknown>;
+    expect(saved.access_token).toBe("tok-nuovo");
+  });
+
+  test("HTTP 401 anche dopo il rinnovo, o senza refresh token -> PlaudAuthError", async () => {
+    await writeTokens(validTokens);
+    const rejected = fakeFetch((call) => (call.url === REFRESH_URL ? json({ access_token: "tok-2" }) : json({}, 401)));
+    await expect(source(rejected.fetchImpl).listRecent()).rejects.toBeInstanceOf(PlaudAuthError);
+    expect(rejected.calls.filter((c) => c.url === REFRESH_URL)).toHaveLength(1);
+
+    await writeTokens({ access_token: "tok-valid" });
+    const noRefresh = fakeFetch(() => json({}, 401));
+    await expect(source(noRefresh.fetchImpl).listRecent()).rejects.toThrow(/npx @plaud-ai\/cli login/);
+    expect(noRefresh.calls).toHaveLength(1);
   });
 
   test("rinnovo rifiutato -> PlaudAuthError", async () => {
@@ -372,9 +422,31 @@ describe("safeFetchText", () => {
       "https://[::1]/t.json",
       "non un url",
     ]) {
-      await expect(safeFetchText(url, { fetchImpl })).rejects.toThrow(/Collegamento al contenuto Plaud/);
+      await expect(safeFetchText(url, { fetchImpl, resolveHost })).rejects.toThrow(/Collegamento al contenuto Plaud/);
     }
     expect(calls).toHaveLength(0);
+  });
+
+  test("rifiuta i nomi che si risolvono in indirizzi interni, anche dopo un reindirizzamento", async () => {
+    const { fetchImpl, calls } = ok();
+    for (const url of [
+      "https://localhost:8443/admin",
+      "https://metadata.internal/latest",
+      "https://rebind.example/t.json",
+      "https://mapped.example/t.json",
+    ]) {
+      await expect(safeFetchText(url, { fetchImpl, resolveHost }), url).rejects.toThrow(/indirizzo di rete interno/);
+    }
+    await expect(safeFetchText("https://sconosciuto.example/t", { fetchImpl, resolveHost })).rejects.toThrow(
+      /Impossibile contattare Plaud/,
+    );
+    expect(calls).toHaveLength(0);
+
+    const redirect = fakeFetch(() => new Response(null, { status: 302, headers: { location: "https://localhost/x" } }));
+    await expect(
+      safeFetchText("https://cdn.plaud.example/a", { fetchImpl: redirect.fetchImpl, resolveHost }),
+    ).rejects.toThrow(/indirizzo di rete interno/);
+    expect(redirect.calls.map((c) => c.url)).toEqual(["https://cdn.plaud.example/a"]);
   });
 
   test("segue i reindirizzamenti solo verso destinazioni sicure", async () => {
@@ -385,24 +457,24 @@ describe("safeFetchText", () => {
           ? new Response(null, { status: 302, headers: { location: "https://10.0.0.1/c" } })
           : new Response("non dovrebbe arrivare qui"),
     );
-    await expect(safeFetchText("https://cdn.plaud.example/a", { fetchImpl })).rejects.toThrow(/IP diretto/);
+    await expect(safeFetchText("https://cdn.plaud.example/a", { fetchImpl, resolveHost })).rejects.toThrow(/IP diretto/);
   });
 
   test("applica il limite di dimensione (dichiarata e effettiva)", async () => {
     const declared = fakeFetch(() => new Response("x", { headers: { "content-length": String(30 * 1024 * 1024) } }));
-    await expect(safeFetchText("https://cdn.plaud.example/t", { fetchImpl: declared.fetchImpl })).rejects.toThrow(
+    await expect(safeFetchText("https://cdn.plaud.example/t", { fetchImpl: declared.fetchImpl, resolveHost })).rejects.toThrow(
       /limite/,
     );
     const streamed = fakeFetch(() => new Response("x".repeat(2048)));
     await expect(
-      safeFetchText("https://cdn.plaud.example/t", { fetchImpl: streamed.fetchImpl, maxBytes: 1024 }),
+      safeFetchText("https://cdn.plaud.example/t", { fetchImpl: streamed.fetchImpl, maxBytes: 1024, resolveHost }),
     ).rejects.toThrow(/limite/);
     const small = fakeFetch(() => new Response("àèì"));
-    await expect(safeFetchText("https://cdn.plaud.example/t", { fetchImpl: small.fetchImpl })).resolves.toBe("àèì");
+    await expect(safeFetchText("https://cdn.plaud.example/t", { fetchImpl: small.fetchImpl, resolveHost })).resolves.toBe("àèì");
   });
 
   test("errore HTTP -> PlaudApiError", async () => {
     const { fetchImpl } = fakeFetch(() => new Response("scaduto", { status: 403 }));
-    await expect(safeFetchText("https://cdn.plaud.example/t", { fetchImpl })).rejects.toBeInstanceOf(PlaudApiError);
+    await expect(safeFetchText("https://cdn.plaud.example/t", { fetchImpl, resolveHost })).rejects.toBeInstanceOf(PlaudApiError);
   });
 });

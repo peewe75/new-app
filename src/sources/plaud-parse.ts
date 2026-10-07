@@ -2,7 +2,8 @@
  * Formato dei file Plaud (API sviluppatori) e conversione in Recording.
  * Usato sia dalla fonte API sia dalla fonte su file locali.
  */
-import { isIP } from "node:net";
+import { lookup } from "node:dns/promises";
+import { BlockList, isIP } from "node:net";
 import { z } from "zod";
 import type { Recording, RecordingRef, Segment } from "../domain/types.js";
 import { recordingId } from "./source.js";
@@ -21,6 +22,32 @@ const LINK_TIMEOUT_MS = 30_000;
 const LINK_MAX_BYTES = 20 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+/**
+ * Indirizzi non pubblici: loopback, reti private, link-local, ULA, multicast e
+ * riservati. Gli IPv6 che incorporano un IPv4 (::ffff:a.b.c.d) seguono le regole IPv4.
+ */
+const INTERNAL_ADDRESSES = new BlockList();
+for (const [network, prefix] of [
+  ["0.0.0.0", 8],
+  ["10.0.0.0", 8],
+  ["100.64.0.0", 10],
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["172.16.0.0", 12],
+  ["192.168.0.0", 16],
+  ["224.0.0.0", 3],
+] as const) {
+  INTERNAL_ADDRESSES.addSubnet(network, prefix, "ipv4");
+}
+for (const [network, prefix] of [
+  ["::", 127],
+  ["fc00::", 7],
+  ["fe80::", 10],
+  ["ff00::", 8],
+] as const) {
+  INTERNAL_ADDRESSES.addSubnet(network, prefix, "ipv6");
+}
 
 // ---------------------------------------------------------------------------
 // Errori
@@ -276,10 +303,40 @@ export function discardBody(res: Response): void {
   res.body?.cancel().catch(() => undefined);
 }
 
+/** Indirizzi IP di un nome host (sostituibile nei test). */
+export type HostResolver = (hostname: string) => Promise<string[]>;
+
 export interface SafeFetchOptions {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   maxBytes?: number;
+  resolveHost?: HostResolver;
+}
+
+async function resolveWithDns(hostname: string): Promise<string[]> {
+  return (await lookup(hostname, { all: true, verbatim: true })).map((entry) => entry.address);
+}
+
+function isInternalAddress(address: string): boolean {
+  const family = isIP(address);
+  return family === 0 || INTERNAL_ADDRESSES.check(address, family === 4 ? "ipv4" : "ipv6");
+}
+
+/**
+ * Il nome deve risolversi solo in indirizzi pubblici: un collegamento verso
+ * servizi interni (localhost, reti private, metadati cloud) è rifiutato.
+ * Resta possibile che il nome cambi indirizzo tra il controllo e la richiesta.
+ */
+async function assertPublicHost(url: URL, resolveHost: HostResolver): Promise<void> {
+  let addresses: string[];
+  try {
+    addresses = await resolveHost(url.hostname);
+  } catch (cause) {
+    throw networkError(cause);
+  }
+  if (addresses.length === 0 || addresses.some(isInternalAddress)) {
+    throw new Error("Collegamento al contenuto Plaud non consentito: indirizzo di rete interno.");
+  }
 }
 
 function assertSafeUrl(raw: string): URL {
@@ -336,15 +393,18 @@ async function readTextLimited(res: Response, maxBytes: number): Promise<string>
 
 /**
  * Scarica un contenuto Plaud (`data_link`, URL prefirmato) come testo.
- * Solo HTTPS, niente credenziali nell'URL né IP diretti (anche dopo i
- * reindirizzamenti), timeout e dimensione massima. Nessun token inviato.
+ * Solo HTTPS, niente credenziali nell'URL né IP diretti né nomi che si
+ * risolvono in indirizzi interni (anche dopo i reindirizzamenti), timeout e
+ * dimensione massima. Nessun token inviato.
  */
 export async function safeFetchText(url: string, opts: SafeFetchOptions = {}): Promise<string> {
   const fetchImpl = opts.fetchImpl ?? fetch;
+  const resolveHost = opts.resolveHost ?? resolveWithDns;
   const maxBytes = opts.maxBytes ?? LINK_MAX_BYTES;
   const signal = AbortSignal.timeout(opts.timeoutMs ?? LINK_TIMEOUT_MS);
   let current = assertSafeUrl(url);
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    await assertPublicHost(current, resolveHost);
     const res = await plaudFetch(fetchImpl, current.href, { redirect: "manual", signal });
     if (REDIRECT_STATUSES.has(res.status)) {
       const location = res.headers.get("location");

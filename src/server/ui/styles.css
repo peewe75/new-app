@@ -1066,7 +1066,9 @@ textarea.input {
   gap: 6px 10px;
 }
 
+/* Sempre sotto l'esito, così le schede restano allineate a prescindere dalla lunghezza del titolo. */
 .result__label {
+  flex-basis: 100%;
   font-weight: 600;
 }
 

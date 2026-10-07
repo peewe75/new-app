@@ -7,6 +7,11 @@ export interface Store {
   hasRecording(id: string): Promise<boolean>;
 
   saveProposal(proposal: Proposal): Promise<void>;
+  /**
+   * Salva una proposta nuova solo se non ne esiste già una con lo stesso id
+   * (anche creata da un altro processo); false se esisteva, senza modificarla.
+   */
+  createProposal(proposal: Proposal): Promise<boolean>;
   getProposal(id: string): Promise<Proposal | null>;
   /** Dalla più recente (per recording.startedAt). */
   listProposals(): Promise<Proposal[]>;

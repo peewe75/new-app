@@ -252,6 +252,14 @@ export const WarningCodeSchema = z.enum([
   "TERMINE_DA_VERIFICARE",
   "DATI_CLIENTE_MANCANTI",
   "CLIENTE_NON_TROVATO",
+  /** Nel gestionale c'è un cliente con lo stesso cognome: collegamento non automatico. */
+  "CLIENTE_DA_VERIFICARE",
+  /** Controparte che risulta cliente dello studio (art. 24 CDF). */
+  "CONFLITTO_INTERESSI",
+  /** Email diretta alla controparte (art. 41 CDF). */
+  "CONTROPARTE_DIRETTA",
+  /** Testo con riferimenti temporali relativi ("oggi", "domani", ...). */
+  "RIFERIMENTO_TEMPORALE",
   "CONFIDENZA_BASSA",
   "NESSUNA_AZIONE",
 ]);

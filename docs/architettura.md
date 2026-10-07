@@ -102,22 +102,22 @@ Ogni partecipante, azione e dubbio porta una o più **evidenze**: il numero del 
 `buildProposal` produce la `Proposal` che l'avvocato vede:
 
 - **Evidenze verificate.** Ogni citazione viene cercata nel segmento indicato, o a cavallo con il successivo, dopo una normalizzazione: senza accenti, minuscole, punteggiatura ridotta a spazi. Le citazioni non ritrovate sono marcate `verified: false` e l'azione riceve l'avviso `EVIDENZA_NON_VERIFICATA`.
-- **Collegamento al gestionale.** Clienti, potenziali clienti e consulenti vengono cercati con `CaseManagement.findClients`. Il miglior candidato con punteggio di almeno 0,6 diventa il `clientMatch`. Se un'email non ha l'indirizzo, lo prende dal cliente collegato.
-- **Avvisi per azione.** Data mancante, non valida o già trascorsa; termine processuale sempre `TERMINE_DA_VERIFICARE`; destinatario mancante; cliente non presente nel gestionale; affidabilità bassa.
-- **Avviso deontologico.** Se tra i partecipanti che parlano c'è un altro avvocato, la proposta riceve l'avviso bloccante `COLLEGA_ART38` e nessuna azione viene preselezionata (vedi [privacy-e-deontologia.md](privacy-e-deontologia.md)).
-- **Preselezione.** Un'azione è preselezionata se l'affidabilità è almeno 0,75 e non ha avvisi di livello «attenzione» o «bloccante».
+- **Collegamento al gestionale.** Clienti, potenziali clienti e consulenti vengono cercati con `CaseManagement.findClients`. Il miglior candidato con punteggio di almeno 0,7 (nome e cognome, email, telefono, ragione sociale) diventa il `clientMatch`; una corrispondenza del solo cognome non collega mai, ma rende l'incarico `CLIENTE_DA_VERIFICARE`. Le regole sono in `src/enrich/client-link.ts`, condivise con l'esecuzione: il nome nel campo «Cliente» dell'incarico prevale sul partecipante collegato, se non è compatibile con esso. Un'email al cliente senza indirizzo lo prende dal cliente collegato, riconosciuto per nome a parole intere; alle email per altri destinatari l'indirizzo non viene mai completato.
+- **Avvisi per azione.** Data mancante, non valida o già trascorsa; termine processuale sempre `TERMINE_DA_VERIFICARE`; destinatario mancante; cliente non presente nel gestionale o da verificare; email diretta alla controparte (`CONTROPARTE_DIRETTA`, art. 41 CDF); riferimenti temporali relativi nel testo dell'email (`RIFERIMENTO_TEMPORALE`); affidabilità bassa.
+- **Avvisi deontologici.** Se tra i partecipanti che parlano c'è un altro avvocato, la proposta riceve l'avviso bloccante `COLLEGA_ART38` e nessuna azione viene preselezionata (vedi [privacy-e-deontologia.md](privacy-e-deontologia.md)). Se una controparte risulta cliente dello studio, la proposta e gli incarichi ricevono `CONFLITTO_INTERESSI` (art. 24 CDF).
+- **Preselezione.** Un'azione è preselezionata se l'affidabilità è almeno 0,75 (0,8 per le email, perché quelle non richieste in chiamata hanno affidabilità tra 0,6 e 0,7) e non ha avvisi di livello «attenzione» o «bloccante». Fa eccezione `TERMINE_DA_VERIFICARE`: la scadenza processuale resta segnalata ma è preselezionata, perché fuori dal calendario è il rischio maggiore.
 - **Azione di sistema.** In coda c'è sempre l'invio della trascrizione alla casella dello studio.
 
 ### 4. Approvazione ed esecuzione
 
-L'interfaccia invia un `ApprovalRequest`: gli id delle azioni spuntate e le eventuali modifiche ai campi. `approveProposal` valida le modifiche con `ActionPayloadSchema` ed esegue le azioni una alla volta. Per ciascuna sceglie il primo esecutore il cui `canHandle` risponde sì. Poi registra un `ExecutionResult` (ok, errore o saltata, con i file prodotti) e restituisce una nuova proposta con lo stato aggiornato. Le azioni già eseguite con successo non vengono ripetute. Le azioni non spuntate restano approvabili anche quando la proposta è «eseguita» (per esempio una scadenza approvata dopo la verifica sul fascicolo).
+L'interfaccia invia un `ApprovalRequest`: gli id delle azioni spuntate e le eventuali modifiche ai campi. `approveProposal` valida le modifiche con `ActionPayloadSchema` e le rende coerenti (un appuntamento da fissare a cui è stata data una data diventa fissato; una scadenza con la data corretta perde il calcolo originario, che resta nelle note come superato), poi esegue le azioni una alla volta. Per ciascuna sceglie il primo esecutore il cui `canHandle` risponde sì. Poi registra un `ExecutionResult` (ok, errore o saltata, con i file prodotti) e restituisce una nuova proposta con lo stato aggiornato. Le azioni già eseguite con successo non vengono ripetute. La proposta è «eseguita in parte» finché un'azione finita in errore, in questa o in una precedente approvazione, non riesce. Le azioni non spuntate restano approvabili anche quando la proposta è «eseguita» (per esempio una scadenza approvata dopo la verifica sul fascicolo).
 
 Esecutori predefiniti (`defaultExecutors()`):
 
 | Esecutore | Azioni | Risultato |
 |---|---|---|
-| `calendario-appuntamenti` | `appuntamento` | `.ics` se fissato; bozza `.eml` al cliente se da fissare |
-| `calendario-scadenze` | `scadenza` | `.ics` con promemoria e avvertenza di verifica |
+| `calendario-appuntamenti` | `appuntamento` | `.ics` se c'è la data; se da fissare, bozza `.eml` al cliente, salvo che lo faccia già un'email approvata allo stesso cliente o che il cliente non partecipi |
+| `calendario-scadenze` | `scadenza` | `.ics` con promemoria e avvertenza di verifica; «(da verificare)» nel titolo dei termini processuali |
 | `bozze-email` | `email` | `.eml` con intestazione `X-Unsent: 1`, quindi aperto come bozza |
 | `invio-trascrizione` | `invio_trascrizione` | `.eml` alla casella dello studio con la trascrizione in allegato |
 | `gestionale` | `incarico`, `accordo_economico`, `documenti`, `attivita` | note nella pratica; nuovo cliente o nuova pratica se servono |
@@ -195,16 +195,18 @@ L'esecutore va passato ad `approveProposal` **prima** di quelli predefiniti, per
 
 ### Il gestionale dello studio
 
-Si implementa `CaseManagement` (`src/enrich/case-management.ts`): `findClients`, `getClient`, `createClient`, `listMatters`, `createMatter`, `addMatterNote`. `findClients` deve restituire i candidati ordinati per punteggio decrescente, da 0 a 1. La proposta collega automaticamente un partecipante solo con punteggio di almeno 0,6, quindi il punteggio deve riflettere la qualità reale della corrispondenza: email esatta, telefono, nome e cognome, ragione sociale. L'adattatore si passa al posto di `JsonCaseManagement` nella pipeline e nell'approvazione. `tests/json-case-management.test.ts` è un buon riferimento per i casi da coprire.
+Si implementa `CaseManagement` (`src/enrich/case-management.ts`): `findClients`, `getClient`, `createClient`, `listMatters`, `createMatter`, `addMatterNote`. `findClients` deve restituire i candidati ordinati per punteggio decrescente, da 0 a 1. La proposta collega automaticamente un partecipante solo con punteggio di almeno 0,7 (il solo cognome vale 0,6 nel gestionale JSON e non basta), quindi il punteggio deve riflettere la qualità reale della corrispondenza: email esatta, telefono, nome e cognome, ragione sociale. L'adattatore si passa al posto di `JsonCaseManagement` nella pipeline e nell'approvazione. `tests/json-case-management.test.ts` è un buon riferimento per i casi da coprire.
 
 ### Una nuova fonte o un nuovo estrattore
 
-- **Fonte** (un altro registratore, una cartella condivisa): si implementa `RecordingSource` e si usa con `syncSource`. Gli id delle registrazioni devono essere stabili, perché Seguito li usa per non analizzare due volte la stessa registrazione.
+- **Fonte** (un altro registratore, una cartella condivisa): si implementa `RecordingSource` e si usa con `syncSource`. Gli id delle registrazioni devono essere stabili, perché Seguito li usa per non analizzare due volte la stessa registrazione. Le proposte nuove si salvano con `Store.createProposal`, che non sovrascrive mai una proposta creata nel frattempo da un altro processo. Un'analisi non riuscita è registrata nel checkpoint `failure:<id>` e ritentata con attese crescenti; se l'errore non è transitorio (`ExtractionError.retryable` falso: rifiuto, limite di token, schema) si ripete solo con `retryFailed`.
 - **Estrattore** (un altro modello, o Claude tramite un fornitore cloud europeo): si implementa `Extractor` e si restituisce un oggetto valido per `ExtractionSchema`. Tutto il resto, dalla verifica delle citazioni agli avvisi, resta invariato.
 
 ## Sicurezza, in breve
 
 - Il server ascolta su `127.0.0.1` per impostazione predefinita. Con `SEGUITO_PASSWORD` richiede l'autenticazione HTTP Basic su ogni richiesta.
+- L'intestazione `Host` deve essere un indirizzo IP, `localhost` o un nome in `SEGUITO_ALLOWED_HOSTS` (o in `SEGUITO_HOST`): una pagina esterna che usa il DNS rebinding riceve 403 prima di qualsiasi altra verifica.
+- I collegamenti `data_link` di Plaud si scaricano solo in HTTPS e solo verso nomi che si risolvono in indirizzi pubblici, anche dopo i reindirizzamenti.
 - La Content Security Policy blocca script e stili esterni o inline. L'interfaccia costruisce il DOM senza `innerHTML`, perché trascrizioni e testi del modello non sono affidabili.
 - I file dell'outbox sono serviti con controllo del percorso, senza possibilità di uscire dalla cartella.
 - Il contenuto della trascrizione è trattato come dato, mai come istruzione: il prompt dice al modello di ignorare eventuali «istruzioni» pronunciate durante la conversazione.

@@ -109,7 +109,7 @@ Esegui questi passaggi **sul computer su cui gira Seguito**.
    Seguito indica quante registrazioni ha elaborato. Avvia l'interfaccia con `npm run serve` e apri <http://127.0.0.1:3000>.
 5. **Nell'uso quotidiano** puoi lasciare aperte due finestre del terminale: una con `npm run poll -- --watch 5`, che controlla le registrazioni nuove ogni 5 minuti, e una con `npm run serve`. In alternativa, tieni aperto solo `npm run serve` e premi **Aggiorna** nell'interfaccia quando vuoi controllare.
 
-Seguito analizza ogni registrazione una sola volta. Le registrazioni ancora senza trascrizione vengono riprovate al controllo successivo.
+Seguito analizza ogni registrazione una sola volta, anche con `poll` e `serve` aperti insieme. Le registrazioni ancora senza trascrizione vengono riprovate al controllo successivo. Un'analisi non riuscita per un errore transitorio viene ritentata con attese crescenti (da 15 minuti a un giorno); se l'errore si ripeterebbe uguale, per esempio una registrazione troppo lunga per il limite di token, Seguito non la ripete da solo: rimossa la causa, esegui `npm run poll -- --retry-failed`.
 
 ## 6. Problemi frequenti
 
@@ -124,6 +124,7 @@ La registrazione esiste, ma Plaud non l'ha ancora trascritta. Controlla nell'app
 - L'account usato per il login è diverso da quello dell'app.
 - La registrazione era già stata analizzata: Seguito non la ripete e la proposta è già nell'elenco.
 - Con `--watch` il controllo successivo arriva dopo i minuti indicati: per non aspettare, premi **Aggiorna** nell'interfaccia.
+- L'analisi non era riuscita ed è in attesa del nuovo tentativo: il riepilogo indica le «analisi rinviate». Per ripeterla subito, `npm run poll -- --retry-failed`.
 
 **Il riassunto di Plaud non viene usato**
 Il nome del template deve contenere «Seguito». Senza il template dello studio Seguito usa il primo riassunto disponibile, o nessuno. L'analisi funziona comunque, perché si basa sulla trascrizione.

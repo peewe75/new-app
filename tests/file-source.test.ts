@@ -113,9 +113,10 @@ describe("FileSource: trascrizione .txt della CLI Plaud", () => {
     expect(() => parseTranscriptText("# startedAt: domani\n[00:00] A: ok", TZ)).toThrow(/data di inizio non valida/);
   });
 
-  test("file senza interventi -> errore con il nome del file", async () => {
+  test("file senza interventi -> errore con il nome del file, al caricamento", async () => {
     await writeFile(join(dir, "vuoto.txt"), "# title: Vuoto\n");
-    await expect(source().listRecent()).rejects.toThrow(/vuoto\.txt/);
+    expect((await source().listRecent()).map((r) => r.externalId)).toEqual(["vuoto"]);
+    await expect(source().fetchRecording("vuoto")).rejects.toThrow(/vuoto\.txt/);
   });
 });
 
@@ -165,11 +166,11 @@ describe("FileSource: JSON", () => {
     });
   });
 
-  test("Recording non valida o JSON malformato -> errore", async () => {
+  test("Recording non valida o JSON malformato -> errore al caricamento", async () => {
     await writeFile(join(dir, "rotto.json"), JSON.stringify({ ...savedRecording, segments: [{ index: "zero" }] }));
-    await expect(source().listRecent()).rejects.toThrow(/rotto\.json.*non è una registrazione valida/);
+    await expect(source().fetchRecording("rotto")).rejects.toThrow(/rotto\.json.*non è una registrazione valida/);
     await writeFile(join(dir, "rotto.json"), "{ incompleto");
-    await expect(source().listRecent()).rejects.toThrow(/JSON valido/);
+    await expect(source().fetchRecording("rotto")).rejects.toThrow(/JSON valido/);
   });
 });
 
@@ -193,6 +194,15 @@ describe("FileSource: elenco e ricerca", () => {
     expect(refs.map((r) => r.externalId)).toEqual(["rossi"]);
     const recent = await source().listRecent({ since: new Date("2026-10-06T00:00:00Z") });
     expect(recent.map((r) => r.externalId)).toEqual(["rossi", "rec-9"]);
+  });
+
+  test("un file non interpretabile non impedisce di leggere gli altri", async () => {
+    await writeFile(join(dir, "LEGGIMI.txt"), "Istruzioni per l'importazione.\n");
+    const refs = await source().listRecent();
+    expect(refs.map((r) => r.externalId).sort()).toEqual(["LEGGIMI", "plaud-77", "rec-9", "rossi"]);
+    expect(refs.find((r) => r.externalId === "LEGGIMI")?.title).toBe("LEGGIMI.txt");
+    await expect(source().fetchRecording("LEGGIMI")).rejects.toThrow(/LEGGIMI\.txt.*riga 1/);
+    expect((await source().fetchRecording("rossi")).title).toBe("Telefonata Rossi");
   });
 
   test("registrazione inesistente -> errore in italiano", async () => {

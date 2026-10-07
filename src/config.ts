@@ -8,7 +8,13 @@ export interface AppConfig {
   outboxDir: string;
   /** File JSON del gestionale di riferimento (mock finché non c'è l'adattatore reale). */
   caseManagementFile: string;
-  server: { host: string; port: number; password: string | null };
+  server: {
+    host: string;
+    port: number;
+    password: string | null;
+    /** Nomi host con cui si raggiunge l'interfaccia, oltre agli indirizzi IP e a localhost. */
+    allowedHosts: string[];
+  };
   claude: {
     model: string;
     effort: "low" | "medium" | "high" | "xhigh" | "max";
@@ -59,6 +65,10 @@ export function loadConfig(): AppConfig {
       host: env("SEGUITO_HOST", "127.0.0.1"),
       port: Number.isFinite(port) ? port : 3000,
       password: envOrNull("SEGUITO_PASSWORD"),
+      allowedHosts: env("SEGUITO_ALLOWED_HOSTS", "")
+        .split(",")
+        .map((host) => host.trim())
+        .filter((host) => host !== ""),
     },
     claude: {
       model: env("SEGUITO_CLAUDE_MODEL", "claude-opus-5-5"),

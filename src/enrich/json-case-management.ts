@@ -32,8 +32,9 @@ const SCORE = {
   phone: 0.95,
   fullName: 0.9,
   organization: 0.85,
+  /** Solo il cognome: candidato da far verificare, sotto la soglia di collegamento automatico (0,7, client-link.ts). */
   surname: 0.6,
-  /** Stesso cognome ma nome diverso: candidato debole, sotto la soglia di collegamento automatico (0,6). */
+  /** Stesso cognome ma nome diverso: candidato debole, nemmeno proposto come da verificare. */
   surnameOtherFirstName: 0.5,
 } as const;
 /** Cifre finali confrontate per i numeri di telefono (prefissi esclusi). */

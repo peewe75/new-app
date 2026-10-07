@@ -1,9 +1,9 @@
-import { copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { approveProposal, ProposalStateError } from "../src/actions/run.js";
+import { ApprovalValidationError, approveProposal, ProposalStateError } from "../src/actions/run.js";
 import {
   CaseManagementDataSchema,
   type ActionType,
@@ -156,9 +156,11 @@ describe("processRecording con le fixture", () => {
     }
     const email = actionOf(rossi, "email");
     expect(email.payload).toMatchObject({ type: "email", recipientEmail: "mario.rossi@example.com" });
+    expect(warningCodes(email)).toEqual([]);
+    // Il termine per l'opposizione resta da verificare, ma è preselezionato: non deve restare fuori dal calendario.
     const deadline = actionOf(rossi, "scadenza");
     expect(warningCodes(deadline)).toContain("TERMINE_DA_VERIFICARE");
-    expect(deadline.preselected).toBe(false);
+    expect(deadline.preselected).toBe(true);
     expect(rossi.participants.find((p) => p.role === "cliente")?.clientMatch?.clientId).toBe("C-0001");
     expect(rossi.actions.at(-1)).toMatchObject({
       origin: "sistema",
@@ -203,11 +205,58 @@ describe("processRecording con le fixture", () => {
   });
 });
 
+describe("processRecording con più processi sullo stesso archivio", () => {
+  it("non sovrascrive una proposta creata (e approvata) da un altro processo durante l'analisi", async () => {
+    const [recording] = await loadFixtureRecordings();
+    if (recording === undefined) throw new Error("Nessuna fixture");
+    const now = new Date("2026-10-07T08:00:00Z");
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started: () => void = () => undefined;
+    const extracting = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const fixtures = new FixtureExtractor({ dir: join(FIXTURES, "extractions") });
+    const slow: Extractor = {
+      name: "lento",
+      model: null,
+      async extract(input) {
+        started();
+        await gate;
+        return fixtures.extract(input);
+      },
+    };
+    // Secondo processo: altre istanze di archivio e gestionale sugli stessi file.
+    const other: PipelineDeps = { ...env.deps, store: new JsonFileStore(env.dataDir), extractor: slow };
+    const pending = processRecording(recording, other, { now });
+    await extracting;
+
+    const first = await processRecording(recording, env.deps, { now });
+    const stored = { store: env.deps.store, caseManagement: env.deps.caseManagement, studio, outboxDir: env.outboxDir };
+    const approved = await approveStoredProposal(
+      recording.id,
+      { actionIds: [actionOf(first.proposal, "invio_trascrizione").id] },
+      stored,
+      now,
+    );
+    release();
+
+    const late = await pending;
+    expect(late.created).toBe(false);
+    expect(late.proposal).toEqual(approved);
+    expect(await env.deps.store.getProposal(recording.id)).toEqual(approved);
+  });
+});
+
 describe("approvazione end-to-end", () => {
   it("esegue le azioni preselezionate di Rossi: calendario, bozze email e gestionale", async () => {
     const rossi = get(await processFixtures(), ROSSI);
     const before = await readCaseManagement();
-    const selected = rossi.actions.filter((a) => a.preselected).map((a) => a.id);
+    // L'avvocato lascia da parte la scadenza per verificarla prima sulla relata.
+    const deadlineId = actionOf(rossi, "scadenza").id;
+    const selected = rossi.actions.filter((a) => a.preselected && a.id !== deadlineId).map((a) => a.id);
     const now = new Date("2026-10-07T09:00:00Z");
 
     const approved = await approveStoredProposal(
@@ -247,9 +296,14 @@ describe("approvazione end-to-end", () => {
     expect(notes.map((n) => n.kind)).toEqual(expect.arrayContaining(["incarico", "accordo_economico"]));
     expect(notes.every((n) => n.sourceRecordingId === ROSSI && n.author === "Seguito")).toBe(true);
 
-    // Più tardi, verificato il termine sulla relata, l'avvocato approva anche la scadenza.
-    const deadlineId = actionOf(approved, "scadenza").id;
+    // Riapprovare solo azioni già eseguite non aggiunge esiti vuoti.
     const stored = { store: env.deps.store, caseManagement: env.deps.caseManagement, studio, outboxDir: env.outboxDir };
+    await expect(approveStoredProposal(ROSSI, { actionIds: selected }, stored, now)).rejects.toBeInstanceOf(
+      ApprovalValidationError,
+    );
+    expect(await env.deps.store.getProposal(ROSSI)).toEqual(approved);
+
+    // Più tardi, verificato il termine sulla relata, l'avvocato approva anche la scadenza.
     const later = await approveStoredProposal(ROSSI, { actionIds: [...selected, deadlineId] }, stored, now);
     expect(later.status).toBe("eseguita");
     const rerun = later.executions.slice(approved.executions.length);
@@ -257,6 +311,7 @@ describe("approvazione end-to-end", () => {
     expect(rerun.find((e) => e.actionId === deadlineId)?.status).toBe("ok");
     const deadlineIcs = await readArtifact(later, deadlineId, "ics");
     expect(deadlineIcs).toContain("DTSTART;VALUE=DATE:20261111\r\n");
+    expect(deadlineIcs).toContain("(da verificare)");
     expect((await readCaseManagement()).matters).toHaveLength(after.matters.length);
 
     const again = await approveStoredProposal(ROSSI, { actionIds: [deadlineId] }, stored, now).catch(
@@ -390,12 +445,15 @@ describe("syncSource", () => {
     source.broken.clear();
     const secondRunAt = new Date("2026-10-07T12:05:00Z");
     const second = await syncSource(source, env.deps, { now: () => secondRunAt });
-    expect(second).toEqual({ processed: 2, skipped: 1, notReady: 1, errors: [expect.stringContaining("Analisi fallita")] });
+    // L'analisi non riuscita non si ripete subito: si attende prima del nuovo tentativo.
+    expect(second).toEqual({ processed: 2, skipped: 1, notReady: 1, postponed: 1, errors: [] });
+    expect(extractor.calls.filter((id) => id === "analisi-fallita")).toHaveLength(1);
     expect(await env.deps.store.getCheckpoint("lastSync:plaud")).toBe(secondRunAt.toISOString());
 
     const third = await syncSource(source, env.deps, { now: () => secondRunAt });
     expect(third.processed).toBe(0);
     expect(third.skipped).toBe(3);
+    expect(third.postponed).toBe(1);
     expect(extractor.calls.filter((id) => id === "demo-rossi-decreto-ingiuntivo")).toHaveLength(1);
     const bianchi = await env.deps.store.getProposal("plaud:demo-avv-bianchi-transazione");
     expect(bianchi?.warnings.map((w) => w.code)).toContain("COLLEGA_ART38");
@@ -410,7 +468,66 @@ describe("syncSource", () => {
     expect([...source.fetched].sort()).toEqual(["analisi-fallita", "demo-rossi-decreto-ingiuntivo"]);
 
     const limited = await syncSource(new FakeSource(await plaudRecordings()), env.deps, { limit: 1 });
-    expect(limited).toEqual({ processed: 0, skipped: 1, notReady: 0, errors: [] });
+    expect(limited).toEqual({ processed: 0, skipped: 1, notReady: 0, postponed: 0, errors: [] });
+  });
+
+  it("ripete un'analisi non riuscita per errore transitorio con attese crescenti", async () => {
+    const source = new FakeSource(await plaudRecordings());
+    const extractor = new CountingExtractor(new Set(["analisi-fallita"]));
+    env.deps.extractor = extractor;
+    const at = (minutes: number) => () => new Date(Date.parse("2026-10-07T12:00:00Z") + minutes * 60_000);
+    const attempts = () => extractor.calls.filter((id) => id === "analisi-fallita").length;
+
+    await syncSource(source, env.deps, { now: at(0) });
+    expect(attempts()).toBe(1);
+    const logs: string[] = [];
+    expect((await syncSource(source, env.deps, { now: at(14), log: (m) => logs.push(m) })).postponed).toBe(1);
+    expect(logs.some((l) => l.startsWith("Analisi rinviata: «Analisi fallita»"))).toBe(true);
+    expect(attempts()).toBe(1);
+
+    const retried = await syncSource(source, env.deps, { now: at(15) });
+    expect(attempts()).toBe(2);
+    expect(retried.errors).toEqual([expect.stringContaining("il servizio di analisi non risponde")]);
+    // Dopo il secondo errore l'attesa raddoppia (30 minuti).
+    await syncSource(source, env.deps, { now: at(44) });
+    expect(attempts()).toBe(2);
+    await syncSource(source, env.deps, { now: at(45) });
+    expect(attempts()).toBe(3);
+  });
+
+  it("non ripete in automatico le analisi con errori non transitori, salvo richiesta esplicita", async () => {
+    const source = new FakeSource(await plaudRecordings());
+    const extractor = new CountingExtractor();
+    env.deps.extractor = extractor;
+    const attempts = () => extractor.calls.filter((id) => id === "analisi-fallita").length;
+
+    const first = await syncSource(source, env.deps);
+    expect(first.errors).toEqual([
+      expect.stringMatching(/Nessuna analisi di esempio.*L'analisi non verrà ripetuta automaticamente\.$/),
+    ]);
+    const muchLater = () => new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const again = await syncSource(source, env.deps, { now: muchLater });
+    expect(attempts()).toBe(1);
+    expect(again.postponed).toBe(1);
+    expect(again.errors).toEqual([expect.stringMatching(/analisi non riuscita .*Non viene ripetuta automaticamente\.$/)]);
+
+    const manual = await syncSource(source, env.deps, { retryFailed: true });
+    expect(attempts()).toBe(2);
+    expect(manual.postponed).toBe(0);
+    expect(manual.errors).toEqual([expect.not.stringContaining("ripetuta automaticamente")]);
+  });
+
+  it("importa una cartella anche se contiene un file non interpretabile", async () => {
+    const folder = join(env.dir, "importazione");
+    await mkdir(folder);
+    for (const name of await readdir(join(FIXTURES, "plaud"))) {
+      await copyFile(join(FIXTURES, "plaud", name), join(folder, name));
+    }
+    await writeFile(join(folder, "LEGGIMI.txt"), "Cartella delle trascrizioni esportate dal Plaud.\n");
+    const source = new FileSource({ path: folder, now: () => new Date("2026-10-07T08:00:00Z") });
+    const result = await syncSource(source, env.deps, { limit: 100, retryFailed: true });
+    expect(result.processed).toBe(3);
+    expect(result.errors).toEqual([expect.stringMatching(/LEGGIMI\.txt.*riga 1/)]);
   });
 
   it("si ferma con le credenziali Plaud scadute, senza aggiornare il checkpoint", async () => {

@@ -364,6 +364,75 @@ describe("approveProposal: esecuzione", () => {
     expect(third.status).toBe("eseguita");
   });
 
+  test("un errore di un'approvazione precedente, non ancora risolto, lascia la proposta eseguita in parte", async () => {
+    const failing = fakeExecutor([], {
+      a1: () => {
+        throw new Error("Data e ora dell'appuntamento mancanti o non valide.");
+      },
+    });
+    const first = await approve(proposal(), { actionIds: ["a1", "a4"] }, [failing]);
+    expect(first.status).toBe("eseguita_parzialmente");
+
+    // Seconda approvazione della sola email: l'appuntamento resta in errore.
+    const second = await approve(first, { actionIds: ["a2"] }, [fakeExecutor([])], LATER);
+    expect(second.status).toBe("eseguita_parzialmente");
+
+    // Corretto e rieseguito, la proposta risulta eseguita.
+    const third = await approve(second, { actionIds: ["a1"] }, [fakeExecutor([])], LATER);
+    expect(third.status).toBe("eseguita");
+  });
+
+  test("modifiche coerenti: data a un appuntamento da fissare, data corretta di una scadenza", async () => {
+    const toSchedule = action("a1", { ...appointment, status: "da_fissare", start: null } as ActionPayload);
+    const deadline = action("a2", {
+      type: "scadenza",
+      title: "Opposizione a decreto ingiuntivo",
+      date: "2026-11-11",
+      time: null,
+      kind: "processuale",
+      legalBasis: "art. 641 c.p.c.",
+      computation: "notifica il 02/10/2026 + 40 giorni = 11/11/2026",
+      notes: "Data riferita dal cliente.",
+    });
+    const calls: Call[] = [];
+    const result = await approve(
+      proposal({ actions: [toSchedule, deadline] }),
+      { actionIds: ["a1", "a2"], edits: { a1: { start: "2026-10-20T15:00" }, a2: { date: "2026-11-10" } } },
+      [fakeExecutor(calls)],
+    );
+    expect(result.actions[0]?.payload).toMatchObject({ status: "fissato", start: "2026-10-20T15:00" });
+    expect(result.actions[1]?.payload).toMatchObject({
+      date: "2026-11-10",
+      computation: null,
+      notes:
+        "Data riferita dal cliente.\nData corretta dall'avvocato: il calcolo originario " +
+        "(«notifica il 02/10/2026 + 40 giorni = 11/11/2026») non è più valido.",
+    });
+    expect(calls.map((c) => c.payload)).toEqual(result.actions.map((a) => a.payload));
+
+    // Solo l'orario cambiato: il calcolo resta valido.
+    const timeOnly = await approve(
+      proposal({ actions: [deadline] }),
+      { actionIds: ["a2"], edits: { a2: { time: "12:00" } } },
+      [fakeExecutor([])],
+    );
+    expect(timeOnly.actions[0]?.payload).toMatchObject({ computation: "notifica il 02/10/2026 + 40 giorni = 11/11/2026" });
+  });
+
+  test("le azioni approvate sono indicate agli esecutori", async () => {
+    let seen: string[] = [];
+    const recorder: ActionExecutor = {
+      name: "registra",
+      canHandle: () => true,
+      async execute(a, ctx) {
+        seen = [...ctx.approvedActionIds].sort();
+        return { actionId: a.id, executedAt: ctx.now.toISOString(), status: "ok", message: "Fatto", artifacts: [] };
+      },
+    };
+    await approve(proposal(), { actionIds: ["a2", "a1"] }, [recorder]);
+    expect(seen).toEqual(["a1", "a2"]);
+  });
+
   test("con gli esecutori predefiniti: file nell'outbox e pratica nel gestionale", async () => {
     const p = proposal({
       participants: [

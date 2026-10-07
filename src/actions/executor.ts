@@ -9,6 +9,8 @@ export interface ExecutionContext {
   outboxDir: string;
   caseManagement: CaseManagement;
   now: Date;
+  /** Azioni approvate in questa esecuzione (comprese quelle già eseguite in precedenza). */
+  approvedActionIds: ReadonlySet<string>;
 }
 
 /** Esegue un tipo di azione approvata. */

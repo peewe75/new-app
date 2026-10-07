@@ -46,8 +46,10 @@ Uso:
   npm run demo [-- --live]              Demo con tre telefonate di esempio (cartelle separate
                                         data/demo e outbox/demo). Con --live le analizza Claude.
   npm run serve                         Avvia l'interfaccia di approvazione sui dati reali.
-  npm run poll [-- --watch <minuti>]    Scarica dal Plaud e analizza le registrazioni nuove;
-                                        con --watch ripete il controllo ogni <minuti> (minimo 1).
+  npm run poll [-- --watch <minuti>] [--retry-failed]
+                                        Scarica dal Plaud e analizza le registrazioni nuove;
+                                        con --watch ripete il controllo ogni <minuti> (minimo 1);
+                                        con --retry-failed ripete subito le analisi non riuscite.
   npm run ingest -- <percorso> [--fixture]
                                         Analizza un file o una cartella di trascrizioni esportate;
                                         con --fixture usa le analisi pronte in fixtures/extractions.
@@ -123,7 +125,7 @@ async function demo(args: string[]): Promise<CommandResult> {
   }
   console.log(`Dati della demo: ${dataDir}\nFile generati: ${outboxDir}`);
   await startServer(config, {
-    ...storedProposalServices({ ...deps, outboxDir }, config.server.password),
+    ...storedProposalServices({ ...deps, outboxDir }, config),
     sync: load,
   });
   return null;
@@ -138,7 +140,7 @@ async function serve(args: string[]): Promise<CommandResult> {
     studio: config.studio,
     outboxDir: config.outboxDir,
   };
-  const services = storedProposalServices(stored, config.server.password);
+  const services = storedProposalServices(stored, config);
   const plaudLinked = existsSync(config.plaud.tokensPath);
   if (plaudLinked && config.claude.apiKeyPresent) {
     const deps: PipelineDeps = { ...stored, extractor: claudeExtractor(config, "npm run serve") };
@@ -157,7 +159,7 @@ async function serve(args: string[]): Promise<CommandResult> {
 }
 
 async function poll(args: string[]): Promise<CommandResult> {
-  const { values } = parseArgs("poll", args, { watch: "string" }, 0);
+  const { flags, values } = parseArgs("poll", args, { watch: "string", "retry-failed": "boolean" }, 0);
   const watch = values.get("watch");
   const minutes = watch === undefined ? null : parseMinutes(watch);
   const config = loadConfig();
@@ -165,10 +167,16 @@ async function poll(args: string[]): Promise<CommandResult> {
   requirePlaudLogin(config);
   const deps = pipelineDeps(config, config.dataDir, config.caseManagementFile, extractor);
   const source = PlaudApiSource.fromConfig(config);
+  // Con --watch le analisi non riuscite si ripetono subito solo al primo controllo.
+  let retryFailed = flags.has("retry-failed");
   const runOnce = async (): Promise<SyncResult> => {
     console.log(`[${timestamp(config)}] Controllo delle registrazioni nel Plaud…`);
-    const result = await syncSource(source, deps, { log: (msg) => console.log(`  ${msg}`) });
+    const result = await syncSource(source, deps, { retryFailed, log: (msg) => console.log(`  ${msg}`) });
+    retryFailed = false;
     printSummary(result);
+    if (result.postponed > 0) {
+      console.log("Per ripetere subito le analisi rinviate o non riuscite: npm run poll -- --retry-failed");
+    }
     return result;
   };
   if (minutes === null) {
@@ -189,7 +197,12 @@ async function ingest(args: string[]): Promise<CommandResult> {
   const deps = pipelineDeps(config, config.dataDir, config.caseManagementFile, extractor);
   const source = new FileSource({ path: resolve(path), timezone: config.studio.timezone });
   console.log(`Importazione da ${resolve(path)}…`);
-  const result = await syncSource(source, deps, { limit: ALL, log: (msg) => console.log(`  ${msg}`) });
+  // Importazione manuale: le analisi non riuscite in precedenza si ripetono sempre.
+  const result = await syncSource(source, deps, {
+    limit: ALL,
+    retryFailed: true,
+    log: (msg) => console.log(`  ${msg}`),
+  });
   printSummary(result);
   if (result.processed > 0) console.log("Aprire l'interfaccia con «npm run serve» per rivedere le proposte.");
   return result.errors.length > 0 ? 1 : 0;
@@ -216,7 +229,7 @@ async function ensureDemoCaseManagement(file: string): Promise<void> {
  * rigenerata, così la demo mostra sempre l'analisi richiesta.
  */
 async function processDemoRecordings(source: FileSource, deps: PipelineDeps, live: boolean): Promise<SyncResult> {
-  const result: SyncResult = { processed: 0, skipped: 0, notReady: 0, errors: [] };
+  const result: SyncResult = { processed: 0, skipped: 0, notReady: 0, postponed: 0, errors: [] };
   for (const ref of await source.listRecent({ limit: ALL })) {
     try {
       const recording = await source.fetchRecording(ref.externalId);
@@ -261,12 +274,15 @@ function caseManagementFor(config: AppConfig, file: string): JsonCaseManagement 
   return new JsonCaseManagement(file, { timeZone: config.studio.timezone });
 }
 
-function storedProposalServices(deps: StoredProposalDeps, password: string | null): AppServices {
+function storedProposalServices(deps: StoredProposalDeps, config: AppConfig): AppServices {
+  const { host, password, allowedHosts } = config.server;
   return {
     store: deps.store,
     studio: deps.studio,
     outboxDir: deps.outboxDir,
     password,
+    // Il nome indicato in SEGUITO_HOST è sempre ammesso; indirizzi IP e localhost lo sono comunque.
+    allowedHosts: [host, ...allowedHosts],
     approve: (proposalId, request) => approveStoredProposal(proposalId, request, deps),
     discard: (proposalId) => discardStoredProposal(proposalId, deps),
   };
@@ -279,7 +295,7 @@ async function syncWithoutThrowing(source: RecordingSource, deps: PipelineDeps):
   } catch (err) {
     const message = errorMessage(err);
     console.error(`Sincronizzazione non riuscita: ${message}`);
-    return { processed: 0, skipped: 0, notReady: 0, errors: [message] };
+    return { processed: 0, skipped: 0, notReady: 0, postponed: 0, errors: [message] };
   }
 }
 
@@ -447,6 +463,7 @@ function printSummary(result: SyncResult): void {
     `elaborate ${result.processed}`,
     `già presenti ${result.skipped}`,
     `in attesa di trascrizione ${result.notReady}`,
+    `analisi rinviate ${result.postponed}`,
     `errori ${result.errors.length}`,
   ];
   console.log(`Registrazioni: ${parts.join(" · ")}.`);

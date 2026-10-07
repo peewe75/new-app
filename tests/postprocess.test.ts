@@ -5,6 +5,7 @@ import {
   type ExtractedAction,
   type ExtractedParticipant,
   type Extraction,
+  type Matter,
   type Proposal,
   type ProposedAction,
   type Recording,
@@ -63,10 +64,13 @@ const rossiMatch: ClientMatch = {
 class FakeCaseManagement implements CaseManagement {
   readonly name = "finto";
   readonly queries: ClientQuery[] = [];
-  constructor(private readonly byName: Record<string, ClientMatch[]>) {}
+  constructor(
+    private readonly byName: Record<string, ClientMatch[]>,
+    private readonly matterNumbers: Record<string, string[]> = {},
+  ) {}
   async findClients(query: ClientQuery): Promise<ClientMatch[]> {
     this.queries.push(query);
-    return this.byName[query.name ?? ""] ?? [];
+    return this.byName[query.organization ?? ""] ?? this.byName[query.name ?? ""] ?? [];
   }
   getClient(): never {
     throw new Error("non usato");
@@ -74,8 +78,16 @@ class FakeCaseManagement implements CaseManagement {
   createClient(): never {
     throw new Error("non usato");
   }
-  listMatters(): never {
-    throw new Error("non usato");
+  async listMatters(clientId: string): Promise<Matter[]> {
+    return (this.matterNumbers[clientId] ?? []).map((number, i) => ({
+      id: `M-${i}`,
+      clientId,
+      number,
+      title: "Pratica",
+      status: "aperta",
+      openedAt: "2026-01-01T00:00:00.000Z",
+      notes: [],
+    }));
   }
   createMatter(): never {
     throw new Error("non usato");
@@ -286,9 +298,11 @@ describe("buildProposal", () => {
       cm,
     );
     expect(proposal.participants.map((p) => p.clientMatch?.score ?? null)).toEqual([null, 0.92, null, null, null]);
+    // La controparte è cercata solo per il controllo del conflitto di interessi, mai collegata.
     expect(cm.queries).toEqual([
       { name: "Mario Rossi", email: null, phone: null, organization: null },
       { name: "Luca Verdi", email: "verdi@example.it", phone: null, organization: null },
+      { name: "Alfa S.r.l.", email: null, phone: null, organization: null },
     ]);
     expect(proposal.participants[1]?.evidence[0]?.verified).toBe(true);
   });
@@ -337,11 +351,21 @@ describe("buildProposal", () => {
       expect(codes(await single(deadline({ date: "2026-10-07" })))).toEqual([]);
       expect(codes(await single(deadline({ time: "25:00" })))).toEqual(["DATA_NON_VALIDA"]);
 
+      // Il termine processuale resta segnalato ma è preselezionato: fuori dal calendario è il rischio maggiore.
       const procedural = await single(deadline({ kind: "processuale", computation: "notifica 02/10/2026 + 40 giorni" }));
       expect(codes(procedural)).toEqual(["TERMINE_DA_VERIFICARE"]);
       expect(severityOf(procedural, "TERMINE_DA_VERIFICARE")).toBe("attenzione");
+      expect(procedural.warnings[0]?.message).toContain("Termine calcolato automaticamente");
       expect(procedural.warnings[0]?.message).toContain("verificarlo sul fascicolo e sul codice");
-      expect(procedural.preselected).toBe(false);
+      expect(procedural.preselected).toBe(true);
+
+      const hearing = await single(deadline({ kind: "processuale", computation: null, time: "09:30" }));
+      expect(hearing.warnings[0]?.message).toMatch(/^Data riferita nella conversazione/);
+      expect(hearing.warnings[0]?.message).not.toContain("calcolato");
+      expect(hearing.preselected).toBe(true);
+
+      const unverified = await single(deadline({ kind: "processuale", evidence: [] }));
+      expect(unverified.preselected).toBe(false);
     });
 
     test("dueDate non valida su documenti e attività: solo informativa", async () => {
@@ -441,23 +465,35 @@ describe("buildProposal", () => {
       expect(proposal.warnings[0]).toMatchObject({ code: "COLLEGA_ART38", severity: "bloccante" });
       expect(proposal.warnings[0]?.message).toBe(
         "Conversazione telefonica con un collega: l'art. 38, comma 2, del Codice deontologico forense vieta di " +
-          "registrare una conversazione telefonica con un collega. Valutare la cancellazione della registrazione; " +
-          "nessuna azione è stata preselezionata.",
+          "registrare una conversazione telefonica con un collega. Valutare la cancellazione della registrazione. " +
+          "Nessuna azione è stata preselezionata.",
       );
       expect(proposal.actions).toHaveLength(2);
       expect(proposal.actions.every((a) => !a.preselected)).toBe(true);
     });
 
-    test("riunione o videochiamata con un collega: consenso di tutti i presenti", async () => {
-      for (const conversationType of ["riunione_in_presenza", "videochiamata"] as const) {
-        const proposal = await build(extraction({ conversationType, participants: [lawyer, colleague] }));
-        expect(proposal.warnings[0]?.message).toBe(
-          "Riunione con un collega: la registrazione è consentita solo con il consenso di tutti i presenti " +
-            "(art. 38, comma 2, del Codice deontologico forense). Verificare il consenso prima di utilizzarla; " +
-            "nessuna azione è stata preselezionata.",
-        );
-        expect(proposal.actions.every((a) => !a.preselected)).toBe(true);
-      }
+    test("riunione con un collega: consenso di tutti i presenti e divieto se collegato al telefono o in vivavoce", async () => {
+      const proposal = await build(extraction({ conversationType: "riunione_in_presenza", participants: [lawyer, colleague] }));
+      expect(proposal.warnings[0]?.message).toBe(
+        "Riunione con un collega: la registrazione è consentita solo con il consenso di tutti i presenti " +
+          "(art. 38, comma 2, del Codice deontologico forense). Se il collega partecipava al telefono o in vivavoce, " +
+          "vale il divieto previsto per le conversazioni telefoniche; anche far ascoltare la telefonata a terzi in " +
+          "vivavoce senza avvisare il collega ha rilievo disciplinare (CNF, sentenza n. 7 del 2016). Verificare il " +
+          "consenso e le modalità di partecipazione prima di utilizzarla. Nessuna azione è stata preselezionata.",
+      );
+      expect(proposal.actions.every((a) => !a.preselected)).toBe(true);
+    });
+
+    test("videochiamata: a due trattata come telefonata, con più partecipanti come riunione", async () => {
+      const oneToOne = await build(extraction({ conversationType: "videochiamata", participants: [lawyer, colleague] }));
+      expect(oneToOne.warnings[0]?.message).toMatch(
+        /^Videochiamata a due con un collega: in via prudenziale va trattata come una conversazione telefonica/,
+      );
+      expect(oneToOne.warnings[0]?.message).toContain("vieta di registrare una conversazione telefonica");
+      const group = await build(extraction({ conversationType: "videochiamata", participants: [lawyer, rossi, colleague] }));
+      expect(group.warnings[0]?.message).toMatch(/^Videochiamata con un collega: la registrazione è consentita solo con il consenso/);
+      expect(group.warnings[0]?.message).toContain("vivavoce");
+      expect([oneToOne, group].every((p) => p.actions.every((a) => !a.preselected))).toBe(true);
     });
 
     test("tipo di conversazione non determinabile: messaggio combinato", async () => {
@@ -473,6 +509,131 @@ describe("buildProposal", () => {
       const proposal = await build(extraction({ participants: [lawyer, rossi, mentioned] }));
       expect(proposal.warnings).toEqual([]);
       expect(proposal.actions.every((a) => a.preselected)).toBe(true);
+    });
+  });
+
+  describe("collegamento al cliente: mai sul solo cognome", () => {
+    const surnameOnly: ClientMatch = { ...rossiMatch, score: 0.6 };
+    const mrsRossi = participant({ speakerLabel: "Speaker 2", isSpeaker: true, name: "Rossi", role: "potenziale_cliente" });
+
+    test("partecipante «Rossi»: non collegato a Mario Rossi, incarico da verificare e non preselezionato", async () => {
+      const cm = new FakeCaseManagement({ Rossi: [surnameOnly] });
+      const proposal = await build(
+        extraction({ participants: [lawyer, mrsRossi], actions: [{ ...engagement, clientName: "Rossi" }] }),
+        cm,
+      );
+      expect(proposal.participants[1]?.clientMatch).toBeNull();
+      const action = proposal.actions[0]!;
+      expect(codes(action)).toEqual(["CLIENTE_DA_VERIFICARE"]);
+      expect(severityOf(action, "CLIENTE_DA_VERIFICARE")).toBe("attenzione");
+      expect(action.warnings[0]?.message).toContain("Mario Rossi");
+      expect(action.warnings[0]?.message).toContain("campo «Cliente»");
+      expect(action.preselected).toBe(false);
+    });
+
+    test("nome dell'incarico diverso dal cliente collegato: prevale il nome", async () => {
+      const cm = new FakeCaseManagement({
+        "Mario Rossi": [rossiMatch],
+        "Anna Rossi": [{ ...rossiMatch, score: 0.5 }],
+      });
+      const proposal = await build(extraction({ actions: [{ ...engagement, clientName: "Anna Rossi" }] }), cm);
+      expect(codes(proposal.actions[0]!)).toEqual(["CLIENTE_NON_TROVATO"]);
+    });
+
+    test("nessun indirizzo del gestionale per un cliente collegato solo per cognome", async () => {
+      const cm = new FakeCaseManagement({ Rossi: [surnameOnly] });
+      const proposal = await build(
+        extraction({ participants: [lawyer, mrsRossi], actions: [email({ recipientName: "Sig.ra Rossi" })] }),
+        cm,
+      );
+      const action = proposal.actions[0]!;
+      expect(action.payload.type === "email" ? action.payload.recipientEmail : undefined).toBeNull();
+      expect(codes(action)).toEqual(["DATI_CLIENTE_MANCANTI"]);
+    });
+  });
+
+  describe("email: destinatari diversi dal cliente", () => {
+    const recipientOf = (a: ProposedAction) => (a.payload.type === "email" ? a.payload.recipientEmail : undefined);
+
+    test("«Dott. Grossi» non riceve l'indirizzo di Rossi (parole intere, solo ai clienti)", async () => {
+      for (const recipientRole of ["consulente", "cliente"] as const) {
+        const action = await single(email({ recipientName: "Dott. Grossi", recipientRole }));
+        expect(recipientOf(action), recipientRole).toBeNull();
+        expect(codes(action)).toContain("DATI_CLIENTE_MANCANTI");
+        expect(action.preselected).toBe(false);
+      }
+      const rossini = await single(email({ recipientName: "Avv. Rossini", recipientRole: "collega_avvocato" }));
+      expect(recipientOf(rossini)).toBeNull();
+    });
+
+    test("art. 41 CDF: email diretta alla controparte segnalata e non preselezionata", async () => {
+      const action = await single(
+        email({ recipientName: "Edilnord S.r.l.", recipientRole: "controparte", recipientEmail: "info@edilnord.example" }),
+      );
+      expect(codes(action)).toEqual(["CONTROPARTE_DIRETTA"]);
+      expect(severityOf(action, "CONTROPARTE_DIRETTA")).toBe("attenzione");
+      expect(action.warnings[0]?.message).toContain("art. 41 del Codice deontologico forense");
+      expect(action.preselected).toBe(false);
+    });
+
+    test("riferimenti temporali relativi nel testo: avviso informativo", async () => {
+      const action = await single(
+        email({ body: "Gentile Sig. Rossi,\nfacendo seguito alla telefonata di questa mattina, Le confermo che domani…" }),
+      );
+      expect(codes(action)).toEqual(["RIFERIMENTO_TEMPORALE"]);
+      expect(severityOf(action, "RIFERIMENTO_TEMPORALE")).toBe("info");
+      expect(action.warnings[0]?.message).toContain("«questa mattina», «domani»");
+      expect(action.preselected).toBe(true);
+      expect((await single(email({ body: "Le confermo l'oggetto della pratica." }))).warnings).toEqual([]);
+    });
+
+    test("email non richiesta (confidenza fino a 0,75): non preselezionata", async () => {
+      expect((await single(email({ confidence: 0.75 }))).preselected).toBe(false);
+      expect((await single(email({ confidence: 0.8 }))).preselected).toBe(true);
+    });
+  });
+
+  describe("art. 24 CDF: controparte che è cliente dello studio", () => {
+    const ferretti: ClientMatch = {
+      clientId: "C-0005",
+      displayName: "Ferretti Arredamenti S.n.c.",
+      email: null,
+      phone: null,
+      matterIds: ["M-0005"],
+      score: 0.85,
+      matchedOn: "organizzazione",
+    };
+
+    test("avviso sulla proposta e sull'incarico, che non è preselezionato", async () => {
+      const cm = new FakeCaseManagement(
+        { "Mario Rossi": [rossiMatch], "Ferretti Arredamenti S.n.c.": [ferretti] },
+        { "C-0005": ["2026/063"] },
+      );
+      const counterpart = participant({ organization: "Ferretti Arredamenti S.n.c.", role: "controparte" });
+      const proposal = await build(
+        extraction({
+          participants: [lawyer, rossi, counterpart],
+          actions: [{ ...engagement, counterpart: "Ferretti Arredamenti S.n.c." }, appointment()],
+        }),
+        cm,
+      );
+      expect(proposal.warnings).toHaveLength(1);
+      expect(proposal.warnings[0]).toMatchObject({ code: "CONFLITTO_INTERESSI", severity: "attenzione" });
+      expect(proposal.warnings[0]?.message).toBe(
+        "Possibile conflitto di interessi (art. 24 del Codice deontologico forense): la controparte " +
+          "«Ferretti Arredamenti S.n.c.» potrebbe corrispondere a Ferretti Arredamenti S.n.c., cliente dello studio " +
+          "(pratica 2026/063). Verificare prima di accettare l'incarico.",
+      );
+      const [incarico, appuntamento] = proposal.actions;
+      expect(codes(incarico!)).toEqual(["CONFLITTO_INTERESSI"]);
+      expect(incarico?.preselected).toBe(false);
+      expect(appuntamento?.preselected).toBe(true);
+    });
+
+    test("la controparte coincide con il cliente collegato: nessun conflitto", async () => {
+      const cm = new FakeCaseManagement({ "Mario Rossi": [rossiMatch] });
+      const proposal = await build(extraction({ actions: [{ ...engagement, counterpart: "Mario Rossi" }] }), cm);
+      expect(proposal.warnings).toEqual([]);
     });
   });
 

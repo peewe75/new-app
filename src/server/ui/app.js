@@ -26,7 +26,7 @@ const STATUS_NOTES = {
   eseguita_parzialmente: {
     tone: "warning",
     title: "Proposta eseguita in parte",
-    text: "Alcune azioni non sono andate a buon fine: puoi correggerle e approvarle di nuovo.",
+    text: "Alcune azioni non sono andate a buon fine: è possibile correggerle e approvarle di nuovo.",
   },
   scartata: { tone: "neutral", title: "Proposta scartata", text: "Nessuna azione è stata eseguita." },
 };
@@ -69,15 +69,22 @@ const WARNING_LABELS = {
   DATA_MANCANTE: "Data mancante",
   DATA_NON_VALIDA: "Data non valida",
   TERMINE_DA_VERIFICARE: "Termine da verificare",
-  DATI_CLIENTE_MANCANTI: "Dati del cliente mancanti",
+  DATI_CLIENTE_MANCANTI: "Destinatario da completare",
   CLIENTE_NON_TROVATO: "Cliente non nel gestionale",
+  CLIENTE_DA_VERIFICARE: "Cliente da verificare",
+  CONFLITTO_INTERESSI: "Possibile conflitto di interessi",
+  CONTROPARTE_DIRETTA: "Email alla controparte",
+  RIFERIMENTO_TEMPORALE: "Date relative nel testo",
   CONFIDENZA_BASSA: "Affidabilità bassa",
   NESSUNA_AZIONE: "Nessuna azione individuata",
 };
 
-const WARNING_TITLES = { COLLEGA_ART38: "Art. 38, comma 2, del Codice deontologico forense" };
+const WARNING_TITLES = {
+  COLLEGA_ART38: "Art. 38, comma 2, del Codice deontologico forense",
+  CONFLITTO_INTERESSI: "Possibile conflitto di interessi (art. 24 del Codice deontologico forense)",
+};
 
-const NEUTRAL_WARNINGS = new Set(["CLIENTE_NON_TROVATO", "CONFIDENZA_BASSA", "NESSUNA_AZIONE"]);
+const NEUTRAL_WARNINGS = new Set(["CLIENTE_NON_TROVATO", "CONFIDENZA_BASSA", "NESSUNA_AZIONE", "RIFERIMENTO_TEMPORALE"]);
 
 const SEVERITY = {
   bloccante: { tone: "danger", label: "Bloccante", rank: 0 },
@@ -138,13 +145,49 @@ const EDIT_FIELDS = {
   incarico: [
     { key: "subject", label: "Oggetto dell'incarico", input: "text", required: true },
     { key: "clientName", label: "Cliente", input: "text", nullable: true },
+    {
+      key: "status",
+      label: "Stato dell'incarico",
+      input: "select",
+      options: [
+        { value: "conferito", label: "Conferito (pratica aperta)" },
+        { value: "in_valutazione", label: "In valutazione" },
+        { value: "non_conferito", label: "Non conferito" },
+      ],
+    },
   ],
   accordo_economico: [
+    {
+      key: "agreed",
+      label: "Stato",
+      input: "select",
+      options: [
+        { value: true, label: "Concordato" },
+        { value: false, label: "Proposto, non ancora accettato" },
+      ],
+    },
     { key: "amount", label: "Importo (€)", input: "number", nullable: true, min: "0", step: "0.01" },
+    {
+      key: "plusVatAndCpa",
+      label: "IVA e CPA",
+      input: "select",
+      options: [
+        { value: true, label: "Oltre IVA e CPA" },
+        { value: false, label: "Comprensivo di IVA e CPA" },
+        { value: null, label: "Non indicato" },
+      ],
+    },
     { key: "advanceAmount", label: "Acconto (€)", input: "number", nullable: true, min: "0", step: "0.01" },
     { key: "paymentTerms", label: "Modalità di pagamento", input: "text", nullable: true },
   ],
 };
+
+/** IVA e CPA come le legge l'avvocato, in tutti e tre i casi. */
+const VAT_LABELS = new Map([
+  [true, "oltre IVA e CPA"],
+  [false, "comprensivo di IVA e CPA"],
+  [null, "IVA e CPA: non indicato"],
+]);
 
 // ---------------------------------------------------------------------------
 // Icone (tracciati SVG costanti)
@@ -215,7 +258,7 @@ function h(tag, props = {}, ...children) {
   for (const [key, value] of Object.entries(props)) {
     if (value === undefined || value === null || value === false) continue;
     if (key === "class") node.className = value;
-    else if (key === "text") node.textContent = value;
+    else if (key === "text") node.textContent = tag === "textarea" ? value : keepAmountsTogether(value);
     else if (key.startsWith("on") && typeof value === "function") node.addEventListener(key.slice(2), value);
     else if (PROPERTY_KEYS.has(key)) node[key] = value;
     else node.setAttribute(key, value === true ? "" : String(value));
@@ -225,6 +268,11 @@ function h(tag, props = {}, ...children) {
     node.append(child instanceof Node ? child : String(child));
   }
   return node;
+}
+
+/** Spazio unificatore tra "€" e l'importo, perché l'a capo non li separi (solo testo mostrato). */
+function keepAmountsTogether(value) {
+  return String(value).replace(/€ (?=[\d-])/g, "€\u00a0");
 }
 
 // ---------------------------------------------------------------------------
@@ -331,12 +379,20 @@ function formatDuration(ms) {
   return hours > 0 ? `${hours} h ${String(minutes).padStart(2, "0")} min` : `${minutes} min`;
 }
 
+// Raggruppamento sempre attivo: con i dati CLDR "it" alcuni browser scrivono 2500 invece di 2.500.
+const AMOUNT_FORMAT = new Intl.NumberFormat("it-IT", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+  useGrouping: "always",
+});
+
+/** Come formatAmount sul server: "€ 2.500,00", oppure "2.500,00 CHF" per le altre valute. */
 function formatMoney(amount, currency) {
-  try {
-    return new Intl.NumberFormat("it-IT", { style: "currency", currency: currency || "EUR" }).format(amount);
-  } catch {
-    return `${new Intl.NumberFormat("it-IT").format(amount)} ${currency}`;
+  const code = (currency || "").trim();
+  if (code === "" || code.toUpperCase() === "EUR" || code === "€") {
+    return `${amount < 0 ? "-" : ""}€ ${AMOUNT_FORMAT.format(Math.abs(amount))}`;
   }
+  return `${AMOUNT_FORMAT.format(amount)} ${code}`;
 }
 
 function plural(count, singular, pluralForm) {
@@ -374,7 +430,7 @@ async function api(path, { method = "GET", body } = {}) {
   try {
     response = await fetch(path, init);
   } catch {
-    throw new Error("Impossibile contattare Seguito: verifica che il server sia in esecuzione e la connessione di rete.");
+    throw new Error("Impossibile contattare Seguito: verificare che il server sia in esecuzione e la connessione di rete.");
   }
   let data = null;
   try {
@@ -529,7 +585,7 @@ function renderInbox(items) {
 
 function emptyInbox() {
   const hint = state.config.syncAvailable
-    ? "Premi «Aggiorna» per cercare nuove registrazioni del Plaud."
+    ? "Premere «Aggiorna» per cercare nuove registrazioni del Plaud."
     : "Le registrazioni elaborate compariranno qui.";
   return h(
     "div",
@@ -552,6 +608,15 @@ function actionsCountText(item) {
 function warningBadge(code) {
   const tone = code === "COLLEGA_ART38" ? "danger" : NEUTRAL_WARNINGS.has(code) ? "neutral" : "warning";
   return h("li", { class: `badge badge--${tone}`, text: WARNING_LABELS[code] ?? code });
+}
+
+const EXECUTED_STATUSES = new Set(["eseguita", "eseguita_parzialmente"]);
+
+/** Testo per le scadenze proposte e non ancora nel calendario; null se nessuna o se la proposta non è stata eseguita. */
+function pendingDeadlinesText(status, count, capitalized) {
+  if (!EXECUTED_STATUSES.has(status) || count === 0) return null;
+  if (count === 1) return capitalized ? "Una scadenza proposta non è ancora nel calendario" : "Scadenza non in calendario";
+  return capitalized ? `${count} scadenze proposte non sono ancora nel calendario` : `${count} scadenze non in calendario`;
 }
 
 function statusChip(status) {
@@ -581,10 +646,17 @@ function proposalCard(item) {
     meta.length > 0 ? h("p", { class: "card__meta", text: meta.join(" · ") }) : null,
     item.summary ? h("p", { class: "card__summary", text: item.summary }) : null,
     h("p", { class: "card__count", text: actionsCountText(item) }),
-    item.warningCodes.length > 0
-      ? h("ul", { class: "badges", "aria-label": "Avvisi" }, item.warningCodes.map(warningBadge))
-      : null,
+    badgesList(item),
   );
+}
+
+function badgesList(item) {
+  const pending = pendingDeadlinesText(item.status, item.pendingDeadlines ?? 0, false);
+  const badges = [
+    ...item.warningCodes.map(warningBadge),
+    pending ? h("li", { class: "badge badge--warning", text: pending }) : null,
+  ].filter(Boolean);
+  return badges.length > 0 ? h("ul", { class: "badges", "aria-label": "Avvisi" }, badges) : null;
 }
 
 function syncMessage(result) {
@@ -593,8 +665,19 @@ function syncMessage(result) {
       ? "Nessuna nuova registrazione da elaborare."
       : `Sincronizzazione completata: ${plural(result.processed, "nuova registrazione elaborata", "nuove registrazioni elaborate")}.`;
   const waiting = Number(result.notReady) || 0;
-  if (waiting === 0) return base;
-  return `${base} ${plural(waiting, "registrazione è", "registrazioni sono")} ancora senza trascrizione: verranno riprovate al prossimo aggiornamento.`;
+  const postponed = Number(result.postponed) || 0;
+  const parts = [base];
+  if (waiting > 0) {
+    parts.push(
+      `${plural(waiting, "registrazione è", "registrazioni sono")} ancora senza trascrizione: verranno riprovate al prossimo aggiornamento.`,
+    );
+  }
+  if (postponed > 0) {
+    parts.push(
+      `${plural(postponed, "analisi non riuscita in precedenza non è stata ripetuta", "analisi non riuscite in precedenza non sono state ripetute")} in questo aggiornamento.`,
+    );
+  }
+  return parts.join(" ");
 }
 
 async function refreshInbox() {
@@ -643,7 +726,7 @@ function blockingConfirmText(proposal) {
   const reason = blocking.some((warning) => warning.code === "COLLEGA_ART38")
     ? "un avviso bloccante (art. 38, comma 2, del Codice deontologico forense)"
     : "un avviso bloccante";
-  return `Questa registrazione ha ${reason}. Vuoi davvero eseguire le azioni selezionate?`;
+  return `Questa registrazione ha ${reason}. Eseguire comunque le azioni selezionate?`;
 }
 
 function renderDetail() {
@@ -733,9 +816,19 @@ function proposalBanners(proposal) {
     proposal.status === "eseguita" && isEditable(proposal)
       ? " Le azioni non selezionate restano nell'elenco e si possono approvare anche in seguito."
       : "";
+  const done = new Set(proposal.executions.filter((result) => result.status === "ok").map((result) => result.actionId));
+  const pendingDeadlines = proposal.actions.filter((action) => action.payload.type === "scadenza" && !done.has(action.id));
+  const pending = pendingDeadlinesText(proposal.status, pendingDeadlines.length, true);
   const banners = [
     ...blocking.map(toBanner),
     note ? banner(note.tone, note.title, `${note.text}${pendingHint}`) : null,
+    pending
+      ? banner(
+          "warning",
+          "Scadenze non in calendario",
+          `${pending}: ${pendingDeadlines.length === 1 ? "verificarla e, se necessario, approvarla" : "verificarle e, se necessario, approvarle"}.`,
+        )
+      : null,
     ...others.map(toBanner),
   ].filter(Boolean);
   return banners.length > 0 ? h("div", { class: "banners" }, banners) : null;
@@ -819,7 +912,7 @@ function describeAction(payload) {
           [
             "Importo",
             payload.amount !== null
-              ? `${formatMoney(payload.amount, payload.currency)}${payload.plusVatAndCpa ? " oltre IVA e CPA" : ""}`
+              ? `${formatMoney(payload.amount, payload.currency)} ${VAT_LABELS.get(payload.plusVatAndCpa) ?? ""}`.trim()
               : null,
           ],
           ["Compenso", FEE_BASIS[payload.basis]],
@@ -958,12 +1051,15 @@ function showSegment(index) {
 }
 
 function toInputValue(spec, value) {
+  // Per le scelte il valore del controllo è la posizione dell'opzione (i valori possono essere booleani o null).
+  if (spec.input === "select") return String(Math.max(0, spec.options.findIndex((option) => option.value === value)));
   if (value === null || value === undefined) return "";
   if (spec.input === "lines") return Array.isArray(value) ? value.join("\n") : "";
   return String(value);
 }
 
 function fromInputValue(spec, raw) {
+  if (spec.input === "select") return spec.options[Number(raw)]?.value ?? null;
   if (spec.input === "lines") {
     return raw
       .split("\n")
@@ -983,25 +1079,33 @@ class FieldError extends Error {
   }
 }
 
+function editorControl(spec, id, onEdit) {
+  if (spec.input === "select") {
+    const options = spec.options.map((option, optionIndex) => h("option", { value: String(optionIndex), text: option.label }));
+    return h("select", { id, class: "input", onchange: onEdit }, options);
+  }
+  if (spec.input === "textarea" || spec.input === "lines") {
+    return h("textarea", { id, class: "input", rows: spec.rows ?? 4, required: spec.required, oninput: onEdit });
+  }
+  return h("input", {
+    id,
+    class: "input",
+    type: spec.input,
+    required: spec.required,
+    min: spec.min,
+    step: spec.step,
+    inputmode: spec.input === "number" ? (spec.step === "1" ? "numeric" : "decimal") : undefined,
+    autocomplete: "off",
+    oninput: onEdit,
+  });
+}
+
 function buildEditor(action, index, onEdit) {
   const specs = EDIT_FIELDS[action.payload.type];
   if (specs === undefined) return { node: null, fields: [] };
   const fields = specs.map((spec, fieldIndex) => {
     const id = `azione-${index}-campo-${fieldIndex}`;
-    const multiline = spec.input === "textarea" || spec.input === "lines";
-    const control = multiline
-      ? h("textarea", { id, class: "input", rows: spec.rows ?? 4, required: spec.required, oninput: onEdit })
-      : h("input", {
-          id,
-          class: "input",
-          type: spec.input,
-          required: spec.required,
-          min: spec.min,
-          step: spec.step,
-          inputmode: spec.input === "number" ? (spec.step === "1" ? "numeric" : "decimal") : undefined,
-          autocomplete: "off",
-          oninput: onEdit,
-        });
+    const control = editorControl(spec, id, onEdit);
     control.value = toInputValue(spec, action.payload[spec.key]);
     // Valore riletto dopo l'assegnazione: il browser può averlo normalizzato.
     const initial = control.value;
@@ -1045,7 +1149,7 @@ function actionCard(action, index, proposal, editable) {
   const editedChip = h("span", { class: "chip chip--edited", text: "Modificata", hidden: true });
   const resultChip = lastResult
     ? h("span", {
-        class: `chip chip--${lastResult.status}`,
+        class: `chip chip--${done ? "ok" : lastResult.status}`,
         text: done ? "Già eseguita" : `Ultimo esito: ${RESULT_LABELS[lastResult.status] ?? lastResult.status}`,
       })
     : null;
@@ -1097,7 +1201,7 @@ function actionsSection(proposal, editable) {
   const intro = editable
     ? h("p", {
         class: "section__intro",
-        text: "Seleziona le azioni da eseguire. Puoi modificarle prima dell'approvazione: nulla viene eseguito senza conferma.",
+        text: "Selezionare le azioni da eseguire; prima dell'approvazione è possibile modificarle. Nulla viene eseguito senza conferma.",
       })
     : null;
   const content =
@@ -1165,9 +1269,13 @@ function transcriptSection(transcript, participants) {
   );
 }
 
+/** Nomi degli estrattori come li legge l'avvocato. */
+const EXTRACTOR_LABELS = { claude: "Claude", fixture: "analisi di esempio precompilata" };
+
 function analysisNote(proposal) {
   const { extractor } = proposal;
-  const engine = extractor.model ? `${extractor.name} (${extractor.model})` : extractor.name;
+  const name = Object.hasOwn(EXTRACTOR_LABELS, extractor.name) ? EXTRACTOR_LABELS[extractor.name] : extractor.name;
+  const engine = extractor.model ? `${name} (${extractor.model})` : name;
   return h("p", { class: "analysis-note", text: `Analisi: ${engine} · ${formatInstantLong(proposal.createdAt)}` });
 }
 
@@ -1349,7 +1457,7 @@ async function approveSelected() {
   const proposal = state.detail.proposal;
   const actionIds = selectedActionIds();
   if (actionIds.length === 0) {
-    showError("Seleziona almeno un'azione da approvare.");
+    showError("Selezionare almeno un'azione da approvare.");
     return;
   }
   let edits;
@@ -1385,7 +1493,7 @@ async function approveSelected() {
 
 async function discardProposal() {
   if (state.busy || state.detail === null) return;
-  if (!window.confirm("Vuoi scartare questa proposta? Nessuna azione verrà eseguita.")) return;
+  if (!window.confirm("Scartare questa proposta? Nessuna azione verrà eseguita.")) return;
   const proposal = state.detail.proposal;
   clearError();
   setBusy(true);

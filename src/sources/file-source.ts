@@ -64,10 +64,28 @@ export class FileSource implements RecordingSource {
     return entry.load();
   }
 
-  /** Voci dei file supportati, in ordine di nome (a parità di id vince il primo). */
+  /**
+   * Voci dei file supportati, in ordine di nome (a parità di id vince il primo).
+   * Un file illeggibile non blocca gli altri: il suo errore emerge al caricamento.
+   */
   private async scan(): Promise<LocalEntry[]> {
-    const entries = await Promise.all((await this.listFiles()).map((file) => this.readEntry(file)));
+    const entries = await Promise.all(
+      (await this.listFiles()).map((file) => this.readEntry(file).catch((err: unknown) => this.brokenEntry(file, err))),
+    );
     return entries.filter((entry) => entry !== null);
+  }
+
+  /** Voce di un file non interpretabile: compare nell'elenco, ma il caricamento restituisce l'errore. */
+  private async brokenEntry(filePath: string, err: unknown): Promise<LocalEntry> {
+    const startedAt = await stat(filePath).then(
+      (info) => info.mtime.toISOString(),
+      () => this.now().toISOString(),
+    );
+    const error = err instanceof Error ? err : new Error(`Il file "${basename(filePath)}" non è leggibile.`);
+    return {
+      ref: { externalId: basename(filePath, extname(filePath)), title: basename(filePath), startedAt, durationMs: null, ready: true },
+      load: () => Promise.reject(error),
+    };
   }
 
   private async listFiles(): Promise<string[]> {

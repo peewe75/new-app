@@ -57,6 +57,7 @@ Le istruzioni passo passo, dall'app Plaud alla creazione del template di riassun
    ```bash
    npm run poll                 # un controllo e basta
    npm run poll -- --watch 5    # controlla ogni 5 minuti, fino a Ctrl+C
+   npm run poll -- --retry-failed   # ripete subito anche le analisi non riuscite
    ```
 
 4. Apri l'interfaccia per rivedere e approvare le proposte:
@@ -67,7 +68,7 @@ Le istruzioni passo passo, dall'app Plaud alla creazione del template di riassun
 
    Se il login a Plaud e la chiave di Claude sono presenti, il pulsante **Aggiorna** dell'interfaccia cerca anche le registrazioni nuove.
 
-Le registrazioni ancora senza trascrizione vengono ignorate e riprovate al controllo successivo. Ogni registrazione viene analizzata una volta sola.
+Le registrazioni ancora senza trascrizione vengono ignorate e riprovate al controllo successivo. Ogni registrazione viene analizzata una volta sola, anche se `poll` e `serve` sono in funzione insieme: una proposta già creata non viene mai sovrascritta. Se l'analisi non riesce per un errore transitorio (per esempio il servizio non risponde), viene ritentata con attese crescenti, da 15 minuti fino a un giorno. Se invece ripeterla darebbe lo stesso esito (registrazione troppo lunga per il limite di token, rifiuto del modello, risposta non conforme), non viene ritentata in automatico: rimossa la causa, la si ripete con `npm run poll -- --retry-failed`.
 
 ## Trascrizioni esportate
 
@@ -106,6 +107,7 @@ Copia `.env.example` in `.env` e completa i valori. Il file `.env` contiene la c
 | `PLAUD_TOKENS_PATH` | `~/.plaud/tokens.json` | Credenziali salvate da `npx @plaud-ai/cli login`. |
 | `PLAUD_REGION` | vuoto | Area dell'account Plaud. Lasciare vuoto, salvo diversa indicazione del supporto Plaud. |
 | `SEGUITO_HOST` | `127.0.0.1` | Indirizzo dell'interfaccia. Con `127.0.0.1` è raggiungibile solo dal computer stesso. |
+| `SEGUITO_ALLOWED_HOSTS` | vuoto | Nomi, separati da virgole, con cui si apre l'interfaccia da altri dispositivi (per esempio `seguito.studio.lan`). Indirizzi IP, `localhost` e il nome in `SEGUITO_HOST` sono sempre accettati; gli altri nomi sono rifiutati, per impedire a un sito esterno di raggiungere Seguito tramite il DNS rebinding. |
 | `SEGUITO_PORT` | `3000` | Porta dell'interfaccia. |
 | `SEGUITO_PASSWORD` | vuoto | Se impostata, l'interfaccia chiede nome utente (per esempio `studio`) e password. Va sempre impostata se Seguito è raggiungibile da altri dispositivi. |
 | `SEGUITO_DATA_DIR` | `./data` | Registrazioni, proposte ed esiti. |
@@ -116,13 +118,13 @@ Per usi particolari esistono anche `PLAUD_API_BASE` e `PLAUD_REFRESH_URL`, che d
 
 ## Che cosa succede quando approvi
 
-Nell'interfaccia ogni azione ha una casella. Sono già spuntate le azioni con affidabilità alta e senza avvisi di attenzione; le altre vanno controllate e, se servono, spuntate a mano. Con **Modifica** puoi correggere data, destinatario, testo e importi prima di approvare. **Approva selezionate** esegue solo le azioni spuntate.
+Nell'interfaccia ogni azione ha una casella. Sono già spuntate le azioni con affidabilità alta e senza avvisi di attenzione, e le scadenze processuali anche se da verificare, perché un termine fuori dal calendario è il rischio maggiore; le altre vanno controllate e, se servono, spuntate a mano. Con **Modifica** puoi correggere data, destinatario, testo, importi, condizioni economiche e stato dell'incarico prima di approvare. **Approva selezionate** esegue solo le azioni spuntate.
 
 | Azione | Risultato |
 |---|---|
-| Appuntamento fissato | Evento `.ics` con promemoria il giorno prima e un'ora prima. |
-| Appuntamento da fissare | Bozza `.eml` al cliente con il link di prenotazione (se configurato) o la richiesta di disponibilità. |
-| Scadenza | Evento `.ics` per il giorno della scadenza (all'ora indicata, se c'è) con promemoria 7 giorni e 1 giorno prima, con la norma e il calcolo del termine e l'avvertenza di verificarlo. |
+| Appuntamento con data e ora | Evento `.ics` con promemoria il giorno prima e un'ora prima, anche se la data è stata indicata con **Modifica** su un appuntamento «da fissare». |
+| Appuntamento da fissare | Bozza `.eml` al cliente con il link di prenotazione (se configurato) o la richiesta di disponibilità. Nessuna bozza se un'email approvata allo stesso cliente parla già dell'appuntamento, o se il cliente non vi partecipa: l'azione resta da completare con la data. |
+| Scadenza | Evento `.ics` per il giorno della scadenza (all'ora indicata, se c'è) con promemoria 7 giorni e 1 giorno prima, con la norma e il calcolo del termine e l'avvertenza di verificarlo. I termini processuali hanno «(da verificare)» nel titolo. Se la data è stata corretta, il calcolo originario resta solo nelle note, come superato. |
 | Email | Bozza `.eml` con la firma dello studio. Se l'indirizzo non è stato detto in chiamata, viene preso dal gestionale. |
 | Incarico, accordo economico, documenti, attività | Nota nella pratica del gestionale. Se serve, Seguito crea il nuovo cliente e la nuova pratica. |
 | Invio della trascrizione | Bozza `.eml` alla casella dello studio, con sintesi, azioni e trascrizione completa (anche in allegato `.txt`). |
@@ -133,15 +135,19 @@ I file si trovano in `outbox/`, in una cartella per ogni registrazione, e si sca
 - **`.eml`**: è una bozza, **non viene inviata**. In Outlook si apre come messaggio da completare e inviare. In Apple Mail, se si apre in sola lettura, usa *Messaggio → Invia di nuovo*. In Thunderbird, *Modifica come nuovo messaggio*. Gmail sul web non apre i file `.eml` come bozze: il collegamento diretto a Gmail è previsto nella roadmap.
 - **Gestionale**: le note e le pratiche vengono scritte in `data/gestionale.json`, o nel file indicato da `SEGUITO_GESTIONALE_FILE`.
 
-Le azioni non spuntate non vengono eseguite, ma restano nella proposta: si possono approvare anche in un secondo momento, per esempio una scadenza dopo averla verificata sul fascicolo. Se un'azione approvata non riesce, la proposta resta «eseguita in parte»: si può correggere e approvare di nuovo, e le azioni già eseguite non vengono ripetute. **Scarta** archivia la proposta senza eseguire nulla.
+Le azioni non spuntate non vengono eseguite, ma restano nella proposta: si possono approvare anche in un secondo momento, per esempio una scadenza dopo averla verificata sul fascicolo. Se un'azione approvata non riesce, la proposta resta «eseguita in parte» finché quell'azione non riesce: si può correggere e approvare di nuovo, e le azioni già eseguite non vengono ripetute. Nell'elenco, le proposte eseguite con scadenze non ancora in calendario lo segnalano. **Scarta** archivia la proposta senza eseguire nulla.
 
 ## Sicurezza e deontologia
 
 - **Nulla parte senza approvazione.** Seguito non invia email e non modifica calendari esterni: produce file e note che l'avvocato controlla.
-- **Telefonate con i colleghi.** L'art. 38, comma 2, del Codice deontologico forense vieta di registrare una conversazione telefonica con un collega e consente la registrazione di una riunione solo con il consenso di tutti i presenti. Se tra i partecipanti c'è un altro avvocato, Seguito mostra un avviso bloccante e non preseleziona nessuna azione.
-- **Termini processuali.** Sono sempre segnalati come «da verificare» sul fascicolo e sul codice.
+- **Telefonate con i colleghi.** L'art. 38, comma 2, del Codice deontologico forense vieta di registrare una conversazione telefonica con un collega e consente la registrazione di una riunione solo con il consenso di tutti i presenti. Se tra i partecipanti c'è un altro avvocato, Seguito mostra un avviso bloccante e non preseleziona nessuna azione. Il collega collegato al telefono o in vivavoce durante una riunione, e la videochiamata a due, sono trattati come telefonate.
+- **Termini processuali.** Sono sempre segnalati come «da verificare» sul fascicolo e sul codice, anche nel titolo dell'evento in calendario. Il prompt distingue le regole di computo del processo civile (art. 155 c.p.c., proroga anche di sabato) e di quello penale (art. 172 c.p.p., il sabato non proroga), e non fa calcolare termini la cui durata non è stata detta.
+- **Conflitto di interessi e controparte assistita.** Una controparte che risulta cliente dello studio produce l'avviso «Possibile conflitto di interessi» (art. 24 CDF); le email dirette alla controparte ricordano l'art. 41 CDF. In entrambi i casi l'azione non è preselezionata.
+- **Collegamento al cliente.** Il solo cognome non basta per collegare un partecipante a un cliente del gestionale; il nome indicato nel campo «Cliente» dell'incarico prevale sempre.
 - **Evidenze.** Ogni azione cita il minuto e la frase della trascrizione. Le citazioni che non si ritrovano nel testo vengono segnalate.
 - **Dati.** Trascrizioni, proposte e file generati restano sul computer dello studio, in cartelle accessibili solo all'utente che esegue Seguito. La trascrizione passa da Plaud e, per l'analisi, da Anthropic: con entrambi va firmato l'accordo sul trattamento dei dati (DPA).
+
+- **Interfaccia.** Risponde solo agli indirizzi IP, a `localhost` e ai nomi autorizzati (`SEGUITO_ALLOWED_HOSTS`), così una pagina web esterna non può leggere le proposte né approvarle tramite il DNS rebinding.
 
 Informativa ai clienti, conservazione dei dati, segreto professionale e valutazione d'impatto sono trattati in [docs/privacy-e-deontologia.md](docs/privacy-e-deontologia.md).
 
