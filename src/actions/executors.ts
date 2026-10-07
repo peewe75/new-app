@@ -1,0 +1,580 @@
+/**
+ * Esecutori delle azioni approvate: eventi .ics e bozze .eml nella cartella
+ * outbox (una sottocartella per proposta), pratiche e note nel gestionale.
+ */
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
+import {
+  formatDuration,
+  formatItalianDate,
+  formatItalianDateTime,
+  formatTimestamp,
+  isLocalDate,
+  isLocalDateTime,
+  localDateOf,
+} from "../domain/time.js";
+import type {
+  ActionPayload,
+  Client,
+  ExecutionArtifact,
+  ExecutionResult,
+  Matter,
+  ParticipantRole,
+  ProposalParticipant,
+  ProposedAction,
+  StudioProfile,
+} from "../domain/types.js";
+import type { ClientQuery } from "../enrich/case-management.js";
+import { writeFileAtomic } from "../store/json-store.js";
+import { buildEml, isEmailAddress, type EmlAddress } from "./eml.js";
+import type { ActionExecutor, ExecutionContext } from "./executor.js";
+import {
+  CONVERSATION_LABELS,
+  ROLE_LABELS,
+  describeAction,
+  formatLocalDate,
+  formatLocalDateTime,
+  normalizeForComparison,
+  safeSlug,
+} from "./format.js";
+import { buildIcsEvent } from "./ics.js";
+
+type PayloadOf<T extends ActionPayload["type"]> = Extract<ActionPayload, { type: T }>;
+type CaseManagementType = "incarico" | "accordo_economico" | "documenti" | "attivita";
+
+interface Outcome {
+  status: ExecutionResult["status"];
+  message: string;
+  artifacts: ExecutionArtifact[];
+}
+
+const CLIENT_ROLES: ReadonlySet<ParticipantRole> = new Set(["cliente", "potenziale_cliente"]);
+const CLIENT_MATCH_MIN_SCORE = 0.6;
+const DEFAULT_APPOINTMENT_MINUTES = 60;
+const APPOINTMENT_ALARMS = [1440, 60];
+const DEADLINE_ALARMS = [10080, 1440];
+const NOTE_AUTHOR = "Seguito";
+
+/** Particelle che aprono un cognome composto ("De Luca", "Della Valle"). */
+const SURNAME_PARTICLES: ReadonlySet<string> = new Set(
+  "de di da del della dello dei degli delle dal dalla lo la li".split(" "),
+);
+/** Titoli ignorati nel separare nome e cognome (confrontati senza punti). */
+const HONORIFICS: ReadonlySet<string> = new Set(
+  "sig sigra signor signora dott dottssa avv ing geom rag prof".split(" "),
+);
+
+export function defaultExecutors(): ActionExecutor[] {
+  return [
+    executor("calendario-appuntamenti", ["appuntamento"], executeAppointment),
+    executor("calendario-scadenze", ["scadenza"], executeDeadline),
+    executor("bozze-email", ["email"], executeEmail),
+    executor("invio-trascrizione", ["invio_trascrizione"], executeTranscript),
+    executor("gestionale", ["incarico", "accordo_economico", "documenti", "attivita"], executeCaseManagement),
+  ];
+}
+
+function executor<T extends ActionPayload["type"]>(
+  name: string,
+  types: readonly T[],
+  run: (action: ProposedAction, payload: PayloadOf<T>, ctx: ExecutionContext) => Promise<Outcome>,
+): ActionExecutor {
+  const handles = (payload: ActionPayload): payload is PayloadOf<T> =>
+    (types as readonly string[]).includes(payload.type);
+  return {
+    name,
+    canHandle: (action) => handles(action.payload),
+    async execute(action, ctx) {
+      const outcome = handles(action.payload)
+        ? await run(action, action.payload, ctx)
+        : failure(`Azione di tipo «${action.payload.type}» non gestita dall'esecutore «${name}».`);
+      return { actionId: action.id, executedAt: ctx.now.toISOString(), ...outcome };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Appuntamenti
+// ---------------------------------------------------------------------------
+
+async function executeAppointment(
+  action: ProposedAction,
+  p: PayloadOf<"appuntamento">,
+  ctx: ExecutionContext,
+): Promise<Outcome> {
+  if (p.status === "da_fissare") return schedulingDraft(action, p, ctx);
+  if (p.start === null || !isLocalDateTime(p.start)) {
+    return failure("Data e ora dell'appuntamento mancanti o non valide: indicarle e approvare di nuovo.");
+  }
+  const ics = buildIcsEvent({
+    uid: eventUid(ctx, action),
+    title: p.title,
+    description: appointmentDescription(p, ctx),
+    location: p.location ?? modeLocation(p.mode, ctx.studio),
+    start: p.start,
+    durationMinutes:
+      p.durationMinutes !== null && p.durationMinutes > 0 ? p.durationMinutes : DEFAULT_APPOINTMENT_MINUTES,
+    timezone: ctx.studio.timezone,
+    alarmsMinutesBefore: APPOINTMENT_ALARMS,
+    now: ctx.now,
+  });
+  const path = await writeOutboxFile(ctx, action, p.title, "ics", ics);
+  return success(`Evento del calendario creato: ${formatLocalDateTime(p.start, ctx.studio.timezone)}.`, [
+    { kind: "ics", label: `Evento: ${p.title}`, path, ref: null },
+  ]);
+}
+
+function appointmentDescription(p: PayloadOf<"appuntamento">, ctx: ExecutionContext): string {
+  const participants =
+    p.participants.length > 0 ? p.participants.join(", ") : ctx.proposal.participants.map(participantName).join(", ");
+  return [
+    p.notes ? `Note: ${p.notes}` : null,
+    participants ? `Partecipanti: ${participants}` : null,
+    `Sintesi della conversazione: ${ctx.proposal.summary}`,
+    `Registrazione: «${ctx.recording.title}»`,
+    `Generato da Seguito dalla registrazione di ${recordingDateTime(ctx)}`,
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
+}
+
+function modeLocation(mode: PayloadOf<"appuntamento">["mode"], studio: StudioProfile): string | null {
+  switch (mode) {
+    case "in_studio":
+      return studio.studioName;
+    case "telefonico":
+      return "Appuntamento telefonico";
+    case "videochiamata":
+      return "Videochiamata";
+    default:
+      return null;
+  }
+}
+
+/** Bozza al cliente per concordare data e ora di un appuntamento da fissare. */
+async function schedulingDraft(
+  action: ProposedAction,
+  p: PayloadOf<"appuntamento">,
+  ctx: ExecutionContext,
+): Promise<Outcome> {
+  const recipient = clientRecipient(ctx.proposal.participants);
+  const greetingName = recipient?.name ?? clientParticipants(ctx.proposal.participants).find((x) => x.name)?.name;
+  const subject = `Fissazione appuntamento – ${p.title}`;
+  const text = [
+    `Gentile ${greetingName ?? "Cliente"},`,
+    "",
+    `facendo seguito ${conversationReference(ctx)}, Le scrivo per fissare l'appuntamento concordato (${p.title}).`,
+    ...modeSentence(p),
+    ctx.studio.bookingLink
+      ? `Per Sua comodità, può scegliere data e ora qui: ${ctx.studio.bookingLink}`
+      : "La prego di indicarmi alcune date e fasce orarie in cui sarebbe disponibile, così da poter fissare l'incontro.",
+    "",
+    "Resto a disposizione per qualsiasi chiarimento.",
+    "",
+    "Cordiali saluti.",
+    "",
+    ctx.studio.signature,
+  ].join("\n");
+  const path = await writeDraft(ctx, action, subject, recipient === null ? [] : [recipient], text);
+  return success(
+    recipient === null
+      ? "Bozza email per fissare l'appuntamento creata senza destinatario: aggiungerlo prima dell'invio."
+      : `Bozza email per fissare l'appuntamento creata (destinatario: ${recipient.name ?? recipient.email}).`,
+    [{ kind: "eml", label: `Bozza email: ${subject}`, path, ref: null }],
+  );
+}
+
+function conversationReference(ctx: ExecutionContext): string {
+  const date = recordingDate(ctx);
+  switch (ctx.proposal.conversationType) {
+    case "telefonata":
+      return `alla nostra telefonata di ${date}`;
+    case "riunione_in_presenza":
+      return `al nostro incontro di ${date}`;
+    case "videochiamata":
+      return `alla nostra videochiamata di ${date}`;
+    case "non_determinabile":
+      return `al nostro colloquio di ${date}`;
+  }
+}
+
+function modeSentence(p: PayloadOf<"appuntamento">): string[] {
+  switch (p.mode) {
+    case "in_studio":
+      return [`L'incontro si terrà presso lo studio${p.location ? ` (${p.location})` : ""}.`];
+    case "telefonico":
+      return ["Il colloquio si svolgerà telefonicamente."];
+    case "videochiamata":
+      return ["Il colloquio si svolgerà in videochiamata: Le invieremo il collegamento una volta fissata la data."];
+    default:
+      return [];
+  }
+}
+
+/** Destinatario: il cliente collegato al gestionale con l'email, altrimenti l'email detta in chiamata. */
+function clientRecipient(participants: ProposalParticipant[]): EmlAddress | null {
+  const clients = clientParticipants(participants);
+  const matched = clients
+    .filter((x) => x.clientMatch?.email && isEmailAddress(x.clientMatch.email))
+    .sort((a, b) => (b.clientMatch?.score ?? 0) - (a.clientMatch?.score ?? 0))[0];
+  if (matched?.clientMatch?.email) {
+    return { name: matched.clientMatch.displayName, email: matched.clientMatch.email.trim() };
+  }
+  const spoken = clients.find((x) => x.email !== null && isEmailAddress(x.email));
+  return spoken?.email ? { name: spoken.name, email: spoken.email.trim() } : null;
+}
+
+// ---------------------------------------------------------------------------
+// Scadenze
+// ---------------------------------------------------------------------------
+
+async function executeDeadline(
+  action: ProposedAction,
+  p: PayloadOf<"scadenza">,
+  ctx: ExecutionContext,
+): Promise<Outcome> {
+  if (p.date === null || !isLocalDate(p.date)) {
+    return failure("Data della scadenza mancante o non valida: indicarla e approvare di nuovo.");
+  }
+  const start = p.time !== null && isLocalDateTime(`${p.date}T${p.time}`) ? `${p.date}T${p.time}` : null;
+  const ics = buildIcsEvent({
+    uid: eventUid(ctx, action),
+    title: `Scadenza: ${p.title}`,
+    description: [
+      ...describeAction(p, ctx.studio.timezone).lines.slice(1),
+      "Termine calcolato automaticamente: verificare.",
+      `Registrazione: «${ctx.recording.title}»`,
+      `Generato da Seguito dalla registrazione di ${recordingDateTime(ctx)}`,
+    ].join("\n"),
+    start,
+    allDayDate: p.date,
+    timezone: ctx.studio.timezone,
+    alarmsMinutesBefore: DEADLINE_ALARMS,
+    now: ctx.now,
+  });
+  const path = await writeOutboxFile(ctx, action, p.title, "ics", ics);
+  const when = `${formatItalianDate(p.date)}${start === null ? "" : `, ore ${p.time}`}`;
+  const ignoredTime =
+    p.time !== null && start === null ? " L'orario indicato non è valido: evento sull'intera giornata." : "";
+  return success(`Scadenza inserita nel calendario: ${when}.${ignoredTime}`, [
+    { kind: "ics", label: `Scadenza: ${p.title}`, path, ref: null },
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// Email
+// ---------------------------------------------------------------------------
+
+async function executeEmail(action: ProposedAction, p: PayloadOf<"email">, ctx: ExecutionContext): Promise<Outcome> {
+  const email = p.recipientEmail?.trim() || null;
+  const to = email === null ? [] : [{ name: p.recipientName?.trim() || null, email }];
+  const path = await writeDraft(ctx, action, p.subject, to, `${p.body.trimEnd()}\n\n${ctx.studio.signature}`);
+  return success(email === null ? "Bozza creata senza destinatario: aggiungerlo prima dell'invio." : "Bozza creata.", [
+    { kind: "eml", label: `Bozza email: ${p.subject}`, path, ref: null },
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// Trascrizione allo studio
+// ---------------------------------------------------------------------------
+
+async function executeTranscript(
+  action: ProposedAction,
+  p: PayloadOf<"invio_trascrizione">,
+  ctx: ExecutionContext,
+): Promise<Outcome> {
+  const { recording } = ctx;
+  const subject = `Trascrizione – ${recording.title} – ${recordingDate(ctx)}`;
+  const transcript = transcriptLines(ctx).join("\n");
+  const header = `${recording.title}\n${recordingDateTime(ctx)} – durata ${formatDuration(recording.durationMs)}`;
+  const to = p.to.trim() === "" ? [] : [{ name: null, email: p.to.trim() }];
+  const path = await writeDraft(ctx, action, subject, to, transcriptBody(ctx, transcript), [
+    { filename: "trascrizione.txt", contentType: "text/plain; charset=utf-8", content: `${header}\n\n${transcript}\n` },
+  ]);
+  return success(
+    to.length === 0
+      ? "Bozza con la trascrizione creata senza destinatario: aggiungerlo prima dell'invio."
+      : `Bozza con la trascrizione per ${p.to.trim()} creata.`,
+    [{ kind: "eml", label: `Bozza email: ${subject}`, path, ref: null }],
+  );
+}
+
+function transcriptLines(ctx: ExecutionContext): string[] {
+  return [...ctx.recording.segments]
+    .sort((a, b) => a.index - b.index)
+    .map((s) => `[${formatTimestamp(s.startMs)}] ${s.speaker}: ${s.text}`);
+}
+
+function transcriptBody(ctx: ExecutionContext, transcript: string): string {
+  const { proposal, recording } = ctx;
+  const actions = proposal.actions
+    .filter((a) => a.payload.type !== "invio_trascrizione")
+    .map((a) => {
+      const { label, lines } = describeAction(a.payload, ctx.studio.timezone);
+      return `- ${label}: ${lines[0] ?? ""}`;
+    });
+  const sections: Array<[string, string[]]> = [
+    ["SINTESI", [proposal.summary]],
+    ["PARTECIPANTI", proposal.participants.map(participantLine)],
+    ["AZIONI PROPOSTE", actions.length > 0 ? actions : ["Nessuna azione proposta."]],
+    ["AVVISI", proposal.warnings.map((w) => `- ${w.message}`)],
+    ["PUNTI DA CHIARIRE", proposal.doubts.map((d) => `- ${d.text}`)],
+    ["TRASCRIZIONE", [transcript || "Trascrizione non disponibile."]],
+  ];
+  return [
+    `Trascrizione della registrazione «${recording.title}».`,
+    "",
+    `Data: ${recordingDateTime(ctx)}`,
+    `Durata: ${formatDuration(recording.durationMs)}`,
+    `Tipo di conversazione: ${CONVERSATION_LABELS[proposal.conversationType]}`,
+    ...sections.filter(([, lines]) => lines.length > 0).flatMap(([title, lines]) => ["", title, ...lines]),
+    "",
+    "Messaggio generato da Seguito.",
+  ].join("\n");
+}
+
+function participantLine(p: ProposalParticipant): string {
+  const role = `${ROLE_LABELS[p.role]}${p.organization ? `, ${p.organization}` : ""}`;
+  const speaker = p.speakerLabel ? ` – ${p.speakerLabel}` : "";
+  const match = p.clientMatch ? ` – nel gestionale: ${p.clientMatch.displayName}` : "";
+  return `- ${p.name ?? "Nome non indicato"} (${role})${speaker}${match}`;
+}
+
+// ---------------------------------------------------------------------------
+// Gestionale: incarichi, accordi economici, documenti, attività
+// ---------------------------------------------------------------------------
+
+async function executeCaseManagement(
+  _action: ProposedAction,
+  p: PayloadOf<CaseManagementType>,
+  ctx: ExecutionContext,
+): Promise<Outcome> {
+  const artifacts: ExecutionArtifact[] = [];
+  const messages: string[] = [];
+  let client = await findClient(p, ctx);
+  if (client === null) {
+    if (p.type !== "incarico") return failure("Cliente non individuato: collega la registrazione a un cliente");
+    if (p.status === "non_conferito") {
+      return skipped("Incarico non conferito e cliente non presente nel gestionale: nessuna registrazione effettuata.");
+    }
+    client = await createClientFor(p, ctx);
+    if (client === null) {
+      return failure("Nome del cliente mancante: indicarlo nel campo «Cliente» e approvare di nuovo.");
+    }
+    artifacts.push({ kind: "gestionale", label: `Nuovo cliente: ${client.displayName}`, path: null, ref: client.id });
+    messages.push(`Nuovo cliente ${client.displayName} inserito nel gestionale.`);
+  }
+
+  const target = await targetMatter(p, client, ctx);
+  if (target === null) {
+    return skipped(`Incarico non conferito e nessuna pratica di ${client.displayName}: nessuna nota registrata.`);
+  }
+  const { matter, created } = target;
+  if (created) {
+    artifacts.push({
+      kind: "gestionale",
+      label: `Nuova pratica ${matter.number} – ${matter.title}`,
+      path: null,
+      ref: matter.id,
+    });
+    const opened = matter.status === "aperta" ? "aperta" : "creata in valutazione";
+    messages.push(`Pratica ${matter.number} «${matter.title}» ${opened} per ${client.displayName}.`);
+  }
+  const note = await ctx.caseManagement.addMatterNote(matter.id, {
+    author: NOTE_AUTHOR,
+    kind: p.type,
+    text: noteText(p, ctx),
+    sourceRecordingId: ctx.proposal.recordingId,
+  });
+  artifacts.push({ kind: "gestionale", label: `Nota nella pratica ${matter.number}`, path: null, ref: note.id });
+  messages.push(`Nota registrata nella pratica ${matter.number} (${client.displayName}).`);
+  return success(messages.join(" "), artifacts);
+}
+
+/** Cliente: partecipante collegato al gestionale, poi ricerca per nome ed email. */
+async function findClient(p: PayloadOf<CaseManagementType>, ctx: ExecutionContext): Promise<Client | null> {
+  const cm = ctx.caseManagement;
+  const clients = clientParticipants(ctx.proposal.participants);
+  const matched = clients
+    .filter((x) => x.clientMatch !== null)
+    .sort((a, b) => (b.clientMatch?.score ?? 0) - (a.clientMatch?.score ?? 0))[0];
+  if (matched?.clientMatch) {
+    const client = await cm.getClient(matched.clientMatch.clientId);
+    if (client !== null) return client;
+  }
+  const queries: ClientQuery[] = [];
+  if (p.type === "incarico" && p.clientName?.trim()) queries.push({ name: p.clientName });
+  // Il cliente può essere stato creato da un'azione precedente della stessa approvazione.
+  for (const x of clients) {
+    if (x.name || x.email || x.phone) queries.push({ name: x.name, email: x.email, phone: x.phone });
+  }
+  for (const query of queries) {
+    const best = (await cm.findClients(query))[0];
+    if (best !== undefined && best.score >= CLIENT_MATCH_MIN_SCORE) {
+      const client = await cm.getClient(best.clientId);
+      if (client !== null) return client;
+    }
+  }
+  return null;
+}
+
+async function createClientFor(p: PayloadOf<"incarico">, ctx: ExecutionContext): Promise<Client | null> {
+  const clients = clientParticipants(ctx.proposal.participants);
+  const name = p.clientName?.trim() || clients.find((x) => x.name?.trim())?.name?.trim();
+  if (!name) return null;
+  const wanted = normalizeForComparison(name);
+  const source =
+    clients.find((x) => x.name !== null && normalizeForComparison(x.name) === wanted) ??
+    (clients.length === 1 ? clients[0] : undefined);
+  const email = source?.email?.trim();
+  return ctx.caseManagement.createClient({
+    kind: "persona_fisica",
+    displayName: name,
+    ...splitPersonName(name),
+    companyName: null,
+    taxCode: null,
+    vatNumber: null,
+    email: email && isEmailAddress(email) ? email : null,
+    pec: null,
+    phone: source?.phone?.trim() || null,
+    address: null,
+  });
+}
+
+/** "Nome Cognome" -> nome e cognome; i cognomi con particella restano uniti ("Maria De Luca"). */
+export function splitPersonName(fullName: string): { firstName: string | null; lastName: string | null } {
+  const tokens = fullName
+    .trim()
+    .split(/\s+/)
+    .filter((t) => t !== "" && !HONORIFICS.has(t.toLowerCase().replace(/\./g, "")));
+  if (tokens.length === 0) return { firstName: null, lastName: null };
+  if (tokens.length === 1) return { firstName: null, lastName: tokens[0] ?? null };
+  const particle = tokens.findIndex(
+    (t, i) => i > 0 && i < tokens.length - 1 && (SURNAME_PARTICLES.has(t.toLowerCase()) || /^d['’]/i.test(t)),
+  );
+  const split = particle > 0 ? particle : tokens.length - 1;
+  return { firstName: tokens.slice(0, split).join(" "), lastName: tokens.slice(split).join(" ") };
+}
+
+async function targetMatter(
+  p: PayloadOf<CaseManagementType>,
+  client: Client,
+  ctx: ExecutionContext,
+): Promise<{ matter: Matter; created: boolean } | null> {
+  const cm = ctx.caseManagement;
+  const matters = (await cm.listMatters(client.id)).sort(
+    (a, b) => timeOf(b.openedAt) - timeOf(a.openedAt) || b.id.localeCompare(a.id),
+  );
+  if (p.type === "incarico") {
+    if (p.status === "non_conferito") {
+      const latest = matters[0];
+      return latest === undefined ? null : { matter: latest, created: false };
+    }
+    const title = p.subject.trim() || `Incarico – ${ctx.recording.title}`;
+    const reusable: ReadonlyArray<Matter["status"]> =
+      p.status === "conferito" ? ["aperta"] : ["aperta", "in_valutazione"];
+    const same = matters.find(
+      (m) => reusable.includes(m.status) && normalizeForComparison(m.title) === normalizeForComparison(title),
+    );
+    if (same !== undefined) return { matter: same, created: false };
+    const status = p.status === "conferito" ? "aperta" : "in_valutazione";
+    return { matter: await cm.createMatter({ clientId: client.id, title, status }), created: true };
+  }
+  const active = matters.find((m) => m.status === "aperta" || m.status === "in_valutazione");
+  if (active !== undefined) return { matter: active, created: false };
+  const title = `Da classificare – ${ctx.recording.title}`;
+  return { matter: await cm.createMatter({ clientId: client.id, title, status: "in_valutazione" }), created: true };
+}
+
+function noteText(p: PayloadOf<CaseManagementType>, ctx: ExecutionContext): string {
+  const { label, lines } = describeAction(p, ctx.studio.timezone);
+  return [
+    `${label}: ${lines[0] ?? ""}`,
+    ...lines.slice(1),
+    `Fonte: registrazione «${ctx.recording.title}» di ${recordingDateTime(ctx)}`,
+  ].join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Utilità
+// ---------------------------------------------------------------------------
+
+function success(message: string, artifacts: ExecutionArtifact[]): Outcome {
+  return { status: "ok", message, artifacts };
+}
+
+function failure(message: string): Outcome {
+  return { status: "errore", message, artifacts: [] };
+}
+
+function skipped(message: string): Outcome {
+  return { status: "saltata", message, artifacts: [] };
+}
+
+function clientParticipants(participants: ProposalParticipant[]): ProposalParticipant[] {
+  return participants.filter((x) => CLIENT_ROLES.has(x.role));
+}
+
+function participantName(p: ProposalParticipant): string {
+  return `${p.name ?? "Nome non indicato"} (${ROLE_LABELS[p.role]})`;
+}
+
+function eventUid(ctx: ExecutionContext, action: ProposedAction): string {
+  return `${safeSlug(ctx.proposal.id)}-${safeSlug(action.id)}@seguito`;
+}
+
+function recordingStart(ctx: ExecutionContext): Date | null {
+  const date = new Date(ctx.recording.startedAt);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/** Es. "mercoledì 7 ottobre 2026 alle ore 09:30" (fuso dello studio). */
+function recordingDateTime(ctx: ExecutionContext): string {
+  const start = recordingStart(ctx);
+  return start === null ? ctx.recording.startedAt : formatItalianDateTime(start, ctx.studio.timezone);
+}
+
+/** Es. "mercoledì 7 ottobre 2026" (fuso dello studio). */
+function recordingDate(ctx: ExecutionContext): string {
+  const start = recordingStart(ctx);
+  return start === null ? ctx.recording.startedAt : formatLocalDate(localDateOf(start, ctx.studio.timezone));
+}
+
+function timeOf(iso: string): number {
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? 0 : t;
+}
+
+/** Scrive il file nella cartella della proposta; restituisce il percorso relativo all'outbox. */
+async function writeOutboxFile(
+  ctx: ExecutionContext,
+  action: ProposedAction,
+  name: string,
+  extension: "ics" | "eml",
+  content: string,
+): Promise<string> {
+  const dir = safeSlug(ctx.proposal.id);
+  const fileName = `${safeSlug(action.id)}-${safeSlug(name)}.${extension}`;
+  await writeFileAtomic(join(ctx.outboxDir, dir, fileName), content);
+  return `${dir}/${fileName}`;
+}
+
+async function writeDraft(
+  ctx: ExecutionContext,
+  action: ProposedAction,
+  subject: string,
+  to: EmlAddress[],
+  text: string,
+  attachments?: Array<{ filename: string; contentType: string; content: string }>,
+): Promise<string> {
+  const eml = buildEml({
+    from: { name: ctx.studio.lawyerName, email: ctx.studio.lawyerEmail },
+    to,
+    subject,
+    text,
+    date: ctx.now,
+    messageId: `${randomUUID()}@seguito.local`,
+    ...(attachments === undefined ? {} : { attachments }),
+  });
+  return writeOutboxFile(ctx, action, subject, "eml", eml);
+}

@@ -244,7 +244,7 @@ export type ActionPayload = z.infer<typeof ActionPayloadSchema>;
 export type ActionType = ActionPayload["type"];
 
 export const WarningCodeSchema = z.enum([
-  "COLLEGA_ART60",
+  "COLLEGA_ART38",
   "EVIDENZA_NON_VERIFICATA",
   "DATA_PASSATA",
   "DATA_MANCANTE",
@@ -352,7 +352,7 @@ export const ProposalSchema = z.object({
   participants: z.array(ProposalParticipantSchema),
   actions: z.array(ProposedActionSchema),
   doubts: z.array(z.object({ text: z.string(), evidence: z.array(ResolvedEvidenceSchema) })),
-  /** Avvisi a livello di conversazione (es. art. 60 CDF). */
+  /** Avvisi a livello di conversazione (es. art. 38, comma 2, CDF). */
   warnings: z.array(WarningSchema),
   extractor: z.object({ name: z.string(), model: z.string().nullable() }),
   executions: z.array(ExecutionResultSchema),

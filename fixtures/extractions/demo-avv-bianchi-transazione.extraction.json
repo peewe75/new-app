@@ -1,0 +1,178 @@
+{
+  "conversationType": "telefonata",
+  "summary": "Telefonata dell'Avv. Giulia Bianchi, difensore del Condominio Via Manzoni 12, all'Avv. Sapone nella causa promossa dalla cliente Laura Neri per danni da infiltrazioni.\nLa collega ha formulato una proposta transattiva: € 6.000 a saldo e stralcio in due rate da € 3.000, spese legali compensate, spese di consulenza tecnica al 50% e lavori di impermeabilizzazione entro il 30 aprile 2027.\nL'Avv. Sapone sottoporrà la proposta alla cliente e risponderà entro venerdì 16 ottobre 2026; la collega invierà via PEC la delibera assembleare.\nProssima udienza della causa: 19 novembre 2026.",
+  "participants": [
+    {
+      "speakerLabel": "Speaker 1",
+      "isSpeaker": true,
+      "name": "Vincenzo Sapone",
+      "role": "avvocato_studio",
+      "organization": null,
+      "phone": null,
+      "email": null,
+      "evidence": [
+        {
+          "segment": 1,
+          "quote": "Buonasera, avvocato Sapone?"
+        }
+      ]
+    },
+    {
+      "speakerLabel": "Speaker 2",
+      "isSpeaker": true,
+      "name": "Giulia Bianchi",
+      "role": "collega_avvocato",
+      "organization": null,
+      "phone": null,
+      "email": null,
+      "evidence": [
+        {
+          "segment": 1,
+          "quote": "Sono l'avvocato Giulia Bianchi, di Como."
+        },
+        {
+          "segment": 6,
+          "quote": "come sa io assisto il condominio"
+        }
+      ]
+    },
+    {
+      "speakerLabel": null,
+      "isSpeaker": false,
+      "name": "Laura Neri",
+      "role": "cliente",
+      "organization": null,
+      "phone": null,
+      "email": null,
+      "evidence": [
+        {
+          "segment": 8,
+          "quote": "seimila euro alla signora Laura Neri"
+        },
+        {
+          "segment": 11,
+          "quote": "la riferisco senz'altro alla mia assistita"
+        }
+      ]
+    },
+    {
+      "speakerLabel": null,
+      "isSpeaker": false,
+      "name": null,
+      "role": "controparte",
+      "organization": "Condominio Via Manzoni 12",
+      "phone": null,
+      "email": null,
+      "evidence": [
+        {
+          "segment": 1,
+          "quote": "la causa Neri contro il Condominio di via Manzoni 12"
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "type": "attivita",
+      "description": "Sottoporre alla cliente Laura Neri la proposta transattiva del Condominio Via Manzoni 12 (€ 6.000 in due rate da € 3.000, spese legali compensate, consulenza tecnica al 50%, lavori di impermeabilizzazione entro il 30 aprile 2027), insieme alla delibera assembleare, e acquisirne le istruzioni.",
+      "assignee": "Avv. Vincenzo Sapone",
+      "dueDate": "2026-10-16",
+      "confidence": 0.9,
+      "evidence": [
+        {
+          "segment": 17,
+          "quote": "io sento la signora Neri, le spiego la proposta e le faccio sapere"
+        },
+        {
+          "segment": 15,
+          "quote": "così la sottopongo alla signora Neri insieme alla proposta"
+        }
+      ],
+      "rationale": "L'avvocato si è impegnato a sentire la cliente sulla proposta prima di rispondere alla collega."
+    },
+    {
+      "type": "scadenza",
+      "title": "Risposta all'Avv. Bianchi sulla proposta transattiva (Neri c/ Condominio Via Manzoni 12)",
+      "date": "2026-10-16",
+      "time": null,
+      "kind": "altro",
+      "legalBasis": null,
+      "computation": null,
+      "notes": "Termine concordato con la collega. Prossima udienza della causa: 19 novembre 2026.",
+      "confidence": 0.92,
+      "evidence": [
+        {
+          "segment": 17,
+          "quote": "Diciamo entro venerdì della settimana prossima, venerdì sedici?"
+        },
+        {
+          "segment": 18,
+          "quote": "Venerdì sedici va benissimo."
+        }
+      ],
+      "rationale": "Le parti hanno concordato espressamente la data entro cui dare risposta alla proposta."
+    },
+    {
+      "type": "documenti",
+      "direction": "da_ricevere",
+      "items": [
+        "Delibera dell'assemblea del Condominio Via Manzoni 12 relativa alla proposta transattiva e ai lavori di impermeabilizzazione"
+      ],
+      "counterpartName": "Avv. Giulia Bianchi",
+      "dueDate": "2026-10-07",
+      "confidence": 0.85,
+      "evidence": [
+        {
+          "segment": 15,
+          "quote": "mi mandi anche la delibera dell'assemblea"
+        },
+        {
+          "segment": 16,
+          "quote": "Gliela mando domani per PEC."
+        }
+      ],
+      "rationale": "La collega si è impegnata a trasmettere la delibera assembleare via PEC il giorno successivo."
+    },
+    {
+      "type": "email",
+      "recipientName": "Avv. Giulia Bianchi",
+      "recipientEmail": null,
+      "recipientRole": "collega_avvocato",
+      "subject": "Riservata personale – Neri c/ Condominio Via Manzoni 12 – proposta transattiva",
+      "body": "Gentile Collega,\n\nfaccio seguito alla nostra conversazione telefonica di oggi per darLe atto di aver ricevuto la proposta transattiva formulata nell'interesse del Condominio di Via Manzoni 12, che riassumo nei termini da Lei illustrati:\n- pagamento alla sig.ra Laura Neri di € 6.000,00 a saldo e stralcio, in due rate da € 3.000,00, la prima entro trenta giorni dalla sottoscrizione dell'accordo e la seconda entro i successivi sessanta giorni;\n- spese legali compensate e spese di consulenza tecnica d'ufficio ripartite in parti uguali;\n- esecuzione dei lavori di impermeabilizzazione del lastrico entro il 30 aprile 2027.\n\nSottoporrò la proposta alla mia assistita e Le farò conoscere la sua posizione entro venerdì 16 ottobre 2026. Resto in attesa della copia della delibera assembleare che mi trasmetterà via PEC.\n\nLa presente è riservata e non producibile in giudizio.\n\nCordiali saluti.",
+      "purpose": "Dare atto per iscritto della ricezione della proposta transattiva e dei suoi termini.",
+      "confidence": 0.9,
+      "evidence": [
+        {
+          "segment": 19,
+          "quote": "le mando una mail per confermarle che ho ricevuto la proposta"
+        },
+        {
+          "segment": 27,
+          "quote": "Anche la mia mail sarà riservata personale."
+        }
+      ],
+      "rationale": "L'avvocato ha annunciato una mail alla collega per fissare per iscritto i termini della proposta."
+    }
+  ],
+  "doubts": [
+    {
+      "text": "L'indirizzo email dell'Avv. Bianchi non è stato dettato: va ripreso dalla comparsa di costituzione del Condominio.",
+      "evidence": [
+        {
+          "segment": 22,
+          "quote": "all'indirizzo dello studio che c'è sulla comparsa"
+        }
+      ]
+    },
+    {
+      "text": "Il termine per i lavori è indicato come «il trenta aprile del prossimo anno»: confermare l'anno (2027) nella bozza di accordo.",
+      "evidence": [
+        {
+          "segment": 14,
+          "quote": "entro il trenta aprile del prossimo anno"
+        }
+      ]
+    }
+  ]
+}

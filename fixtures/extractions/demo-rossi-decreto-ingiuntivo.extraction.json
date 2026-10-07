@@ -1,0 +1,276 @@
+{
+  "conversationType": "telefonata",
+  "summary": "Telefonata tra l'Avv. Sapone e il cliente Mario Rossi, che il 2 ottobre 2026 ha ricevuto la notifica di un decreto ingiuntivo del Tribunale di Como ottenuto da Edilnord S.r.l. per € 18.500, saldo di lavori edili che contesta per vizi.\nL'avvocato ha indicato il termine di 40 giorni per l'opposizione (art. 641 c.p.c.), in scadenza l'11 novembre 2026, da verificare sulla relata.\nIl cliente ha conferito l'incarico per l'opposizione con un compenso forfettario di € 2.500 oltre IVA e CPA (acconto del 50% alla firma del mandato).\nFissato un incontro in studio per giovedì 15 ottobre 2026 alle 10:00, al quale il cliente porterà i documenti; lo studio invierà un'email di riepilogo.",
+  "participants": [
+    {
+      "speakerLabel": "Speaker 1",
+      "isSpeaker": true,
+      "name": "Vincenzo Sapone",
+      "role": "avvocato_studio",
+      "organization": null,
+      "phone": null,
+      "email": null,
+      "evidence": [
+        {
+          "segment": 0,
+          "quote": "Pronto, Sapone."
+        }
+      ]
+    },
+    {
+      "speakerLabel": "Speaker 2",
+      "isSpeaker": true,
+      "name": "Mario Rossi",
+      "role": "cliente",
+      "organization": null,
+      "phone": null,
+      "email": null,
+      "evidence": [
+        {
+          "segment": 1,
+          "quote": "Buongiorno avvocato, sono Mario Rossi."
+        }
+      ]
+    },
+    {
+      "speakerLabel": null,
+      "isSpeaker": false,
+      "name": null,
+      "role": "controparte",
+      "organization": "Edilnord S.r.l.",
+      "phone": null,
+      "email": null,
+      "evidence": [
+        {
+          "segment": 20,
+          "quote": "decreto ingiuntivo, ricorrente Edilnord S.r.l."
+        },
+        {
+          "segment": 3,
+          "quote": "Dalla Edilnord, quelli che mi hanno fatto i lavori in casa"
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "type": "appuntamento",
+      "title": "Incontro in studio con Mario Rossi – opposizione a decreto ingiuntivo Edilnord",
+      "status": "fissato",
+      "start": "2026-10-15T10:00",
+      "durationMinutes": 60,
+      "location": null,
+      "mode": "in_studio",
+      "participants": [
+        "Mario Rossi",
+        "Avv. Vincenzo Sapone"
+      ],
+      "notes": "Esame dei documenti e sottoscrizione del mandato; il cliente porterà decreto ingiuntivo con relata, contratto d'appalto, fatture, foto dei vizi e corrispondenza con Edilnord.",
+      "confidence": 0.95,
+      "evidence": [
+        {
+          "segment": 27,
+          "quote": "Intendevo giovedì della settimana prossima, giovedì quindici."
+        },
+        {
+          "segment": 29,
+          "quote": "allora giovedì quindici ottobre alle dieci, in studio"
+        },
+        {
+          "segment": 29,
+          "quote": "Teniamoci un'oretta"
+        }
+      ],
+      "rationale": "Data, ora e luogo dell'incontro sono stati concordati espressamente e ripetuti dall'avvocato."
+    },
+    {
+      "type": "incarico",
+      "status": "conferito",
+      "clientName": "Mario Rossi",
+      "subject": "Opposizione al decreto ingiuntivo del Tribunale di Como ottenuto da Edilnord S.r.l. (€ 18.500, lavori edili contestati per vizi)",
+      "matterType": "civile – opposizione a decreto ingiuntivo (appalto)",
+      "counterpart": "Edilnord S.r.l.",
+      "urgency": "Termine per l'opposizione in scadenza l'11 novembre 2026 (40 giorni dalla notifica del 2 ottobre 2026).",
+      "notes": "Contratto d'appalto di € 50.500, di cui € 32.000 pagati; saldo trattenuto per vizi della terrazza e dei bagni. Mandato da sottoscrivere all'incontro del 15 ottobre 2026.",
+      "confidence": 0.95,
+      "evidence": [
+        {
+          "segment": 38,
+          "quote": "proceda pure con l'opposizione, le do l'incarico"
+        },
+        {
+          "segment": 5,
+          "quote": "adesso mi chiedono diciottomila e cinquecento euro"
+        },
+        {
+          "segment": 7,
+          "quote": "il saldo non gliel'ho dato"
+        }
+      ],
+      "rationale": "Il cliente ha conferito espressamente l'incarico di proporre opposizione al decreto ingiuntivo."
+    },
+    {
+      "type": "accordo_economico",
+      "description": "Compenso forfettario per il giudizio di opposizione a decreto ingiuntivo (primo grado)",
+      "agreed": true,
+      "amount": 2500,
+      "currency": "EUR",
+      "basis": "forfait",
+      "hourlyRate": null,
+      "plusVatAndCpa": true,
+      "advanceAmount": 1250,
+      "paymentTerms": "Acconto del 50% alla firma del mandato, saldo alla conclusione del primo grado; escluse le spese vive (contributo unificato, notifiche, eventuale consulente tecnico).",
+      "confidence": 0.92,
+      "evidence": [
+        {
+          "segment": 35,
+          "quote": "le propongo un forfait di duemilacinquecento euro, più IVA e cassa avvocati"
+        },
+        {
+          "segment": 37,
+          "quote": "Metà alla firma del mandato, quindi milleduecentocinquanta più IVA e cassa"
+        },
+        {
+          "segment": 38,
+          "quote": "Va bene, mi sembra corretto."
+        }
+      ],
+      "rationale": "Il compenso è stato proposto dall'avvocato e accettato espressamente dal cliente."
+    },
+    {
+      "type": "scadenza",
+      "title": "Termine per l'opposizione al decreto ingiuntivo Edilnord S.r.l.",
+      "date": "2026-11-11",
+      "time": null,
+      "kind": "processuale",
+      "legalBasis": "Art. 641 c.p.c. (opposizione entro 40 giorni dalla notifica del decreto ingiuntivo)",
+      "computation": "notifica il 02/10/2026 + 40 giorni = 11/11/2026 (mercoledì, giorno non festivo)",
+      "notes": "Data di notifica riferita dal cliente: da verificare sulla relata di notifica. Entro il termine l'atto di opposizione deve essere notificato a Edilnord S.r.l.",
+      "confidence": 0.88,
+      "evidence": [
+        {
+          "segment": 9,
+          "quote": "Venerdì due ottobre, la mattina presto."
+        },
+        {
+          "segment": 10,
+          "quote": "ma entro quaranta giorni dalla notifica"
+        },
+        {
+          "segment": 12,
+          "quote": "si arriva a mercoledì undici novembre"
+        }
+      ],
+      "rationale": "L'avvocato ha indicato il termine di legge e la data di scadenza calcolata dalla notifica riferita dal cliente."
+    },
+    {
+      "type": "documenti",
+      "direction": "da_ricevere",
+      "items": [
+        "Decreto ingiuntivo notificato, completo della relata di notifica",
+        "Contratto d'appalto con Edilnord S.r.l.",
+        "Fatture emesse da Edilnord S.r.l.",
+        "Fotografie dei vizi della terrazza e del bagno",
+        "Corrispondenza con Edilnord S.r.l., compresa la raccomandata di contestazione dei vizi e i messaggi del geometra"
+      ],
+      "counterpartName": "Mario Rossi",
+      "dueDate": "2026-10-15",
+      "confidence": 0.92,
+      "evidence": [
+        {
+          "segment": 31,
+          "quote": "Il decreto ingiuntivo notificato, completo, con la relata di notifica"
+        },
+        {
+          "segment": 31,
+          "quote": "tutta la corrispondenza con la Edilnord, compresa la raccomandata"
+        },
+        {
+          "segment": 32,
+          "quote": "Se riesco gliele mando prima anche per mail"
+        }
+      ],
+      "rationale": "L'avvocato ha elencato i documenti che il cliente deve portare all'incontro del 15 ottobre."
+    },
+    {
+      "type": "email",
+      "recipientName": "Mario Rossi",
+      "recipientEmail": null,
+      "recipientRole": "cliente",
+      "subject": "Appuntamento del 15 ottobre e documenti per l'opposizione al decreto ingiuntivo",
+      "body": "Gentile Sig. Rossi,\n\nfacendo seguito alla telefonata di questa mattina, Le confermo l'appuntamento presso lo studio per giovedì 15 ottobre 2026 alle ore 10:00, per esaminare il decreto ingiuntivo notificatoLe su ricorso di Edilnord S.r.l. e predisporre l'opposizione.\n\nLe ricordo che l'opposizione va proposta entro quaranta giorni dalla notifica (art. 641 c.p.c.): sulla base della data di notifica da Lei indicata, il 2 ottobre 2026, il termine scade l'11 novembre 2026. La data sarà comunque verificata sulla relata di notifica.\n\nLa prego di portare all'incontro, o di anticiparci via email se possibile, i seguenti documenti:\n- decreto ingiuntivo notificato, completo della relata di notifica;\n- contratto d'appalto con Edilnord S.r.l.;\n- fatture emesse da Edilnord S.r.l.;\n- fotografie dei vizi della terrazza e del bagno;\n- corrispondenza con Edilnord S.r.l., compresa la raccomandata di contestazione dei vizi e i messaggi scambiati con il geometra della società.\n\nCome concordato, il compenso per il giudizio di opposizione di primo grado è di € 2.500,00 a forfait, oltre IVA e CPA, con acconto del 50% alla sottoscrizione del mandato e saldo alla conclusione del primo grado; restano escluse le spese vive (contributo unificato, spese di notifica ed eventuale consulenza tecnica). Il mandato sarà sottoscritto in occasione dell'incontro.\n\nNel frattempo La invito a non sottoscrivere documenti e a non assumere impegni di pagamento con Edilnord S.r.l., indirizzando allo studio ogni comunicazione.\n\nCordiali saluti.",
+      "purpose": "Confermare l'appuntamento del 15 ottobre, elencare i documenti da portare e riportare per iscritto il compenso concordato.",
+      "confidence": 0.9,
+      "evidence": [
+        {
+          "segment": 33,
+          "quote": "le facciamo mandare dallo studio una mail di riepilogo con l'appuntamento e l'elenco dei documenti"
+        },
+        {
+          "segment": 39,
+          "quote": "nella mail le scrivo anche il compenso che abbiamo concordato"
+        },
+        {
+          "segment": 34,
+          "quote": "Sì, sì, è sempre quella."
+        }
+      ],
+      "rationale": "L'avvocato ha annunciato l'invio di un'email di riepilogo con appuntamento, documenti e compenso; l'indirizzo non è stato dettato ma è già in archivio."
+    },
+    {
+      "type": "attivita",
+      "description": "Verificare sulla relata la data di notifica del decreto ingiuntivo e ricontrollare il termine per l'opposizione (calcolato all'11 novembre 2026).",
+      "assignee": "Avv. Vincenzo Sapone",
+      "dueDate": null,
+      "confidence": 0.9,
+      "evidence": [
+        {
+          "segment": 39,
+          "quote": "appena ho la relata, controllo io la data della notifica"
+        },
+        {
+          "segment": 12,
+          "quote": "la data precisa la controllo sulla relata di notifica"
+        }
+      ],
+      "rationale": "L'avvocato si è impegnato a verificare la data di notifica, da cui dipende il termine."
+    }
+  ],
+  "doubts": [
+    {
+      "text": "Il cliente non sa dire se il decreto sia stato dichiarato provvisoriamente esecutivo: verificarlo sul decreto, perché in tal caso occorre valutare l'istanza di sospensione.",
+      "evidence": [
+        {
+          "segment": 22,
+          "quote": "Non mi pare, ma non le so dire."
+        },
+        {
+          "segment": 23,
+          "quote": "con l'opposizione chiederemmo anche la sospensione"
+        }
+      ]
+    },
+    {
+      "text": "La raccomandata di contestazione dei vizi sarebbe stata inviata «a marzo o aprile»: verificarne la data e il contenuto, rilevanti per la tempestività della denuncia dei vizi.",
+      "evidence": [
+        {
+          "segment": 15,
+          "quote": "Marzo o aprile, adesso non mi ricordo bene."
+        },
+        {
+          "segment": 16,
+          "quote": "vanno denunciati entro sessanta giorni dalla scoperta"
+        }
+      ]
+    },
+    {
+      "text": "Oltre a € 18.500 il decreto ingiunge interessi e spese non quantificati nella telefonata: verificare l'importo complessivo sul decreto.",
+      "evidence": [
+        {
+          "segment": 5,
+          "quote": "diciottomila e cinque più gli interessi e le spese"
+        }
+      ]
+    }
+  ]
+}

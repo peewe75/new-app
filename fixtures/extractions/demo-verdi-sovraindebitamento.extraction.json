@@ -1,0 +1,228 @@
+{
+  "conversationType": "telefonata",
+  "summary": "Primo contatto telefonico: l'Avv. Sapone ha richiamato Paolo Verdi, lavoratore dipendente con debiti per circa € 85.000 (due finanziarie, carta revolving, mutuo sulla casa di abitazione con rate arretrate, cartelle dell'Agenzia delle Entrate-Riscossione).\nL'avvocato ha illustrato la ristrutturazione dei debiti del consumatore (artt. 67 ss. CCII), il ruolo dell'OCC e la possibile alternativa del concordato minore.\nProposto un compenso di € 1.500 oltre IVA e CPA per lo studio preliminare, con preventivo scritto per la procedura: il sig. Verdi deve ancora decidere.\nLo studio invierà via email l'elenco dei documenti e il link per prenotare il primo incontro.",
+  "participants": [
+    {
+      "speakerLabel": "Speaker 1",
+      "isSpeaker": true,
+      "name": "Paolo Verdi",
+      "role": "potenziale_cliente",
+      "organization": null,
+      "phone": null,
+      "email": "paolo.verdi@example.com",
+      "evidence": [
+        {
+          "segment": 1,
+          "quote": "parlo con il signor Paolo Verdi?"
+        },
+        {
+          "segment": 31,
+          "quote": "paolo.verdi@example.com"
+        }
+      ]
+    },
+    {
+      "speakerLabel": "Speaker 2",
+      "isSpeaker": true,
+      "name": "Vincenzo Sapone",
+      "role": "avvocato_studio",
+      "organization": null,
+      "phone": null,
+      "email": null,
+      "evidence": [
+        {
+          "segment": 1,
+          "quote": "Sono l'avvocato Sapone, di Cantù."
+        }
+      ]
+    },
+    {
+      "speakerLabel": null,
+      "isSpeaker": false,
+      "name": null,
+      "role": "controparte",
+      "organization": "Agenzia delle Entrate-Riscossione",
+      "phone": null,
+      "email": null,
+      "evidence": [
+        {
+          "segment": 6,
+          "quote": "E poi l'Agenzia delle Entrate-Riscossione, delle cartelle"
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "type": "appuntamento",
+      "title": "Primo incontro in studio con Paolo Verdi – sovraindebitamento",
+      "status": "da_fissare",
+      "start": null,
+      "durationMinutes": null,
+      "location": null,
+      "mode": "in_studio",
+      "participants": [
+        "Paolo Verdi",
+        "Avv. Vincenzo Sapone"
+      ],
+      "notes": "Il sig. Verdi prenoterà l'incontro con il link che lo studio invierà via email; porterà i documenti richiesti, se non li avrà già inviati.",
+      "confidence": 0.85,
+      "evidence": [
+        {
+          "segment": 29,
+          "quote": "il link per prenotare direttamente l'appuntamento in studio"
+        },
+        {
+          "segment": 34,
+          "quote": "ne parlo con mia moglie e poi prenoto"
+        }
+      ],
+      "rationale": "È stato concordato un incontro in studio, senza data: la prenotazione è affidata al cliente."
+    },
+    {
+      "type": "incarico",
+      "status": "in_valutazione",
+      "clientName": "Paolo Verdi",
+      "subject": "Sovraindebitamento: valutazione della ristrutturazione dei debiti del consumatore (artt. 67 ss. CCII) per debiti di circa € 85.000",
+      "matterType": "crisi d'impresa e dell'insolvenza – sovraindebitamento",
+      "counterpart": "Creditori: due finanziarie, emittente della carta revolving, banca del mutuo, Agenzia delle Entrate-Riscossione",
+      "urgency": "Una finanziaria ha preannunciato azioni legali in caso di mancato pagamento entro fine ottobre.",
+      "notes": "Lavoratore dipendente (circa € 1.800 netti al mese); mutuo sulla casa di abitazione con sei o sette rate arretrate. Parte delle cartelle deriva da una precedente attività con partita IVA, cessata nel 2018: da valutare la qualifica di consumatore o, in alternativa, il concordato minore.",
+      "confidence": 0.9,
+      "evidence": [
+        {
+          "segment": 24,
+          "quote": "ne devo parlare con mia moglie. Le posso far sapere?"
+        },
+        {
+          "segment": 13,
+          "quote": "ristrutturazione dei debiti del consumatore"
+        },
+        {
+          "segment": 12,
+          "quote": "se entro fine mese non pago passano alle vie legali"
+        }
+      ],
+      "rationale": "Il sig. Verdi ha chiesto assistenza per i suoi debiti ma si è riservato di decidere dopo averne parlato con la moglie."
+    },
+    {
+      "type": "accordo_economico",
+      "description": "Compenso per lo studio preliminare della posizione debitoria; per la procedura seguirà un preventivo scritto (compenso dell'OCC a parte)",
+      "agreed": false,
+      "amount": 1500,
+      "currency": "EUR",
+      "basis": "forfait",
+      "hourlyRate": null,
+      "plusVatAndCpa": true,
+      "advanceAmount": null,
+      "paymentTerms": "Al conferimento dell'incarico per lo studio preliminare.",
+      "confidence": 0.85,
+      "evidence": [
+        {
+          "segment": 23,
+          "quote": "Per lo studio preliminare il compenso è di millecinquecento euro, più IVA e cassa"
+        },
+        {
+          "segment": 23,
+          "quote": "le faccio un preventivo scritto"
+        },
+        {
+          "segment": 24,
+          "quote": "ne devo parlare con mia moglie"
+        }
+      ],
+      "rationale": "Il compenso è stato soltanto proposto: il potenziale cliente non lo ha ancora accettato."
+    },
+    {
+      "type": "documenti",
+      "direction": "da_ricevere",
+      "items": [
+        "Ultime tre dichiarazioni dei redditi",
+        "Ultime sei buste paga",
+        "Elenco di tutti i creditori con i relativi importi",
+        "Contratti di finanziamento, compresi il contratto di mutuo e quello della carta revolving",
+        "Estratti di ruolo dell'Agenzia delle Entrate-Riscossione"
+      ],
+      "counterpartName": "Paolo Verdi",
+      "dueDate": null,
+      "confidence": 0.9,
+      "evidence": [
+        {
+          "segment": 27,
+          "quote": "le ultime tre dichiarazioni dei redditi, le ultime buste paga"
+        },
+        {
+          "segment": 27,
+          "quote": "un elenco di tutti i creditori con gli importi"
+        },
+        {
+          "segment": 27,
+          "quote": "gli estratti di ruolo dell'Agenzia delle Entrate-Riscossione"
+        }
+      ],
+      "rationale": "L'avvocato ha elencato i documenti necessari per lo studio della posizione."
+    },
+    {
+      "type": "email",
+      "recipientName": "Paolo Verdi",
+      "recipientEmail": "paolo.verdi@example.com",
+      "recipientRole": "potenziale_cliente",
+      "subject": "Documenti per l'esame della Sua posizione e prenotazione del primo incontro",
+      "body": "Gentile Sig. Verdi,\n\nfacendo seguito alla nostra telefonata di questa mattina, Le indico i documenti utili per esaminare la Sua posizione:\n- ultime tre dichiarazioni dei redditi;\n- ultime sei buste paga;\n- elenco di tutti i creditori, con l'importo dovuto a ciascuno, anche approssimativo;\n- contratti di finanziamento, compresi il contratto di mutuo e quello della carta revolving;\n- estratti di ruolo dell'Agenzia delle Entrate-Riscossione, scaricabili dall'area riservata del sito dell'Agenzia.\n\nPer il primo incontro in studio può scegliere direttamente giorno e orario tramite questo link: https://prenota.studio.example/avv-sapone\n\nI documenti potranno essere portati all'incontro oppure anticipati via email.\n\nCome anticipato, il compenso per lo studio preliminare è di € 1.500,00 oltre IVA e CPA; per l'eventuale procedura Le sarà sottoposto un preventivo scritto, al quale si aggiungerà il compenso dell'Organismo di composizione della crisi (OCC).\n\nResto a disposizione per ogni chiarimento.\n\nCordiali saluti.",
+      "purpose": "Inviare l'elenco dei documenti da raccogliere e il link per prenotare il primo incontro.",
+      "confidence": 0.92,
+      "evidence": [
+        {
+          "segment": 29,
+          "quote": "Le mando una mail con l'elenco dei documenti"
+        },
+        {
+          "segment": 31,
+          "quote": "paolo.verdi@example.com"
+        }
+      ],
+      "rationale": "L'avvocato si è impegnato a inviare l'elenco dei documenti e il link di prenotazione all'indirizzo dettato."
+    }
+  ],
+  "doubts": [
+    {
+      "text": "Parte delle cartelle dell'Agenzia delle Entrate-Riscossione deriva dalla precedente attività con partita IVA: verificare la qualifica di consumatore e quindi la procedura applicabile (ristrutturazione dei debiti del consumatore o concordato minore).",
+      "evidence": [
+        {
+          "segment": 8,
+          "quote": "un po' sono tasse di quando avevo la partita IVA"
+        },
+        {
+          "segment": 25,
+          "quote": "bisogna capire se lei rientra come consumatore"
+        }
+      ]
+    },
+    {
+      "text": "Gli importi dei debiti (circa € 85.000 in totale, mutuo compreso) e il numero delle rate arretrate del mutuo («sei o sette») sono indicati a memoria: verificarli con l'elenco dei creditori e i contratti.",
+      "evidence": [
+        {
+          "segment": 6,
+          "quote": "lì sono indietro di sei o sette rate"
+        },
+        {
+          "segment": 10,
+          "quote": "È per quello che arrivo a ottantacinque, contando anche il mutuo."
+        }
+      ]
+    },
+    {
+      "text": "Dal 2023 il sig. Verdi avrebbe pagato alcune rate ricorrendo ad altri finanziamenti: ricostruire la sequenza dei finanziamenti, rilevante per la verifica dell'assenza di colpa grave, malafede o frode (art. 69 CCII).",
+      "evidence": [
+        {
+          "segment": 18,
+          "quote": "abbiamo cominciato a pagare una rata con l'altra"
+        },
+        {
+          "segment": 17,
+          "quote": "non si sia indebitato con colpa grave, malafede o frode"
+        }
+      ]
+    }
+  ]
+}

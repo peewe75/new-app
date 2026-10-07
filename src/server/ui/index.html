@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#1f3a5f" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#14181e" media="(prefers-color-scheme: dark)">
+  <meta name="referrer" content="no-referrer">
+  <meta name="description" content="Seguito: proposte di azioni dopo le chiamate e le riunioni dello studio, da approvare prima dell'esecuzione.">
+  <title>Seguito</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script type="module" src="/static/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Vai al contenuto</a>
+  <header class="topbar">
+    <div class="topbar__inner">
+      <a class="brand" href="#/">
+        <img class="brand__mark" src="/static/icon.svg" alt="" width="36" height="36">
+        <span class="brand__text">
+          <span class="brand__name">Seguito</span>
+          <span class="brand__studio" id="studio-name"></span>
+        </span>
+      </a>
+    </div>
+  </header>
+
+  <main id="main" class="container" tabindex="-1">
+    <p class="loading">Caricamento…</p>
+    <noscript><p class="loading">Per usare Seguito è necessario attivare JavaScript nel browser.</p></noscript>
+  </main>
+
+  <footer id="actionbar" class="actionbar" hidden></footer>
+
+  <div class="toasts">
+    <div id="status" class="toast-region" role="status" aria-live="polite"></div>
+    <div id="alert" class="toast-region" role="alert" aria-live="assertive"></div>
+  </div>
+</body>
+</html>

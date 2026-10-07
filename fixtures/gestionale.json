@@ -1,0 +1,270 @@
+{
+  "clients": [
+    {
+      "id": "C-0001",
+      "kind": "persona_fisica",
+      "displayName": "Mario Rossi",
+      "firstName": "Mario",
+      "lastName": "Rossi",
+      "companyName": null,
+      "taxCode": "RSSMRA68M12B639Q",
+      "vatNumber": null,
+      "email": "mario.rossi@example.com",
+      "pec": null,
+      "phone": "+39 333 123 4567",
+      "address": "Via Milano 21, 22063 Cantù (CO)"
+    },
+    {
+      "id": "C-0002",
+      "kind": "persona_fisica",
+      "displayName": "Laura Neri",
+      "firstName": "Laura",
+      "lastName": "Neri",
+      "companyName": null,
+      "taxCode": "NRELRA75D52C933I",
+      "vatNumber": null,
+      "email": "laura.neri@example.com",
+      "pec": null,
+      "phone": "+39 347 555 0192",
+      "address": "Via Manzoni 12, 22063 Cantù (CO)"
+    },
+    {
+      "id": "C-0003",
+      "kind": "persona_giuridica",
+      "displayName": "Bianchi Costruzioni S.p.A.",
+      "firstName": null,
+      "lastName": null,
+      "companyName": "Bianchi Costruzioni S.p.A.",
+      "taxCode": "02468100139",
+      "vatNumber": "02468100139",
+      "email": "amministrazione.bianchicostruzioni@example.com",
+      "pec": "bianchicostruzioni.pec@example.com",
+      "phone": "+39 031 555 0147",
+      "address": "Via Lecco 88, 22100 Como"
+    },
+    {
+      "id": "C-0004",
+      "kind": "persona_fisica",
+      "displayName": "Giorgio Colombo",
+      "firstName": "Giorgio",
+      "lastName": "Colombo",
+      "companyName": null,
+      "taxCode": "CLMGRG81A20B639P",
+      "vatNumber": null,
+      "email": "giorgio.colombo@example.com",
+      "pec": null,
+      "phone": "+39 340 555 7781",
+      "address": "Via Alessandro Volta 5, 22063 Cantù (CO)"
+    },
+    {
+      "id": "C-0005",
+      "kind": "persona_giuridica",
+      "displayName": "Ferretti Arredamenti S.n.c.",
+      "firstName": null,
+      "lastName": null,
+      "companyName": "Ferretti Arredamenti S.n.c.",
+      "taxCode": "03579240136",
+      "vatNumber": "03579240136",
+      "email": "info.ferrettiarredamenti@example.com",
+      "pec": "ferrettiarredamenti.pec@example.com",
+      "phone": "+39 031 555 0263",
+      "address": "Via Como 140, 22063 Cantù (CO)"
+    },
+    {
+      "id": "C-0006",
+      "kind": "persona_fisica",
+      "displayName": "Francesca Brambilla",
+      "firstName": "Francesca",
+      "lastName": "Brambilla",
+      "companyName": null,
+      "taxCode": "BRMFNC79S63C933R",
+      "vatNumber": null,
+      "email": "francesca.brambilla@example.com",
+      "pec": null,
+      "phone": "+39 339 555 4410",
+      "address": "Via Roma 3, 22060 Cucciago (CO)"
+    }
+  ],
+  "matters": [
+    {
+      "id": "M-0001",
+      "clientId": "C-0001",
+      "number": "2023/045",
+      "title": "Rossi – risarcimento danni da sinistro stradale",
+      "status": "chiusa",
+      "openedAt": "2023-03-14T09:00:00.000Z",
+      "notes": [
+        {
+          "id": "N-0001",
+          "at": "2023-03-14T09:30:00.000Z",
+          "author": "Avv. Vincenzo Sapone",
+          "kind": "incarico",
+          "text": "Conferito incarico per il risarcimento dei danni subiti nel sinistro stradale del 12/01/2023 (tamponamento a Cantù).",
+          "sourceRecordingId": null
+        },
+        {
+          "id": "N-0002",
+          "at": "2024-02-20T15:10:00.000Z",
+          "author": "Avv. Vincenzo Sapone",
+          "kind": "nota",
+          "text": "Pratica definita in via stragiudiziale con la compagnia del responsabile civile: risarcimento liquidato, pratica archiviata.",
+          "sourceRecordingId": null
+        }
+      ]
+    },
+    {
+      "id": "M-0002",
+      "clientId": "C-0002",
+      "number": "2025/087",
+      "title": "Neri c/ Condominio Via Manzoni 12 – infiltrazioni",
+      "status": "aperta",
+      "openedAt": "2025-05-20T08:30:00.000Z",
+      "notes": [
+        {
+          "id": "N-0003",
+          "at": "2025-05-20T09:00:00.000Z",
+          "author": "Avv. Vincenzo Sapone",
+          "kind": "incarico",
+          "text": "Conferito incarico per il risarcimento dei danni da infiltrazioni provenienti dal lastrico solare condominiale nell'appartamento della cliente, all'ultimo piano.",
+          "sourceRecordingId": null
+        },
+        {
+          "id": "N-0004",
+          "at": "2025-09-18T10:15:00.000Z",
+          "author": "Avv. Vincenzo Sapone",
+          "kind": "nota",
+          "text": "Procedimento di mediazione obbligatoria (art. 5 d.lgs. 28/2010) concluso con esito negativo.",
+          "sourceRecordingId": null
+        },
+        {
+          "id": "N-0005",
+          "at": "2025-11-10T11:00:00.000Z",
+          "author": "Avv. Vincenzo Sapone",
+          "kind": "nota",
+          "text": "Notificato al Condominio Via Manzoni 12 l'atto di citazione avanti il Tribunale di Como.",
+          "sourceRecordingId": null
+        },
+        {
+          "id": "N-0006",
+          "at": "2026-03-25T16:40:00.000Z",
+          "author": "Avv. Vincenzo Sapone",
+          "kind": "nota",
+          "text": "Il Condominio è costituito in giudizio con l'Avv. Giulia Bianchi del foro di Como. Disposta consulenza tecnica d'ufficio sui danni.",
+          "sourceRecordingId": null
+        },
+        {
+          "id": "N-0007",
+          "at": "2026-09-15T09:20:00.000Z",
+          "author": "Avv. Vincenzo Sapone",
+          "kind": "nota",
+          "text": "Depositata la relazione del CTU: danni stimati in € 7.800. Prossima udienza: 19/11/2026.",
+          "sourceRecordingId": null
+        }
+      ]
+    },
+    {
+      "id": "M-0003",
+      "clientId": "C-0003",
+      "number": "2026/041",
+      "title": "Bianchi Costruzioni S.p.A. – recupero credito verso Immobiliare Lario S.r.l.",
+      "status": "aperta",
+      "openedAt": "2026-04-08T07:45:00.000Z",
+      "notes": [
+        {
+          "id": "N-0008",
+          "at": "2026-04-08T08:00:00.000Z",
+          "author": "Avv. Vincenzo Sapone",
+          "kind": "incarico",
+          "text": "Conferito incarico per il recupero del credito di € 42.300 per fatture insolute relative al cantiere di Via Garibaldi, Cantù.",
+          "sourceRecordingId": null
+        },
+        {
+          "id": "N-0009",
+          "at": "2026-06-30T14:30:00.000Z",
+          "author": "Avv. Vincenzo Sapone",
+          "kind": "nota",
+          "text": "Depositato ricorso per decreto ingiuntivo avanti il Tribunale di Como.",
+          "sourceRecordingId": null
+        }
+      ]
+    },
+    {
+      "id": "M-0004",
+      "clientId": "C-0004",
+      "number": "2026/058",
+      "title": "Colombo – difesa nel procedimento penale n. 1234/2026 R.G.N.R. (lesioni personali stradali)",
+      "status": "aperta",
+      "openedAt": "2026-05-12T10:00:00.000Z",
+      "notes": [
+        {
+          "id": "N-0010",
+          "at": "2026-05-12T10:30:00.000Z",
+          "author": "Avv. Vincenzo Sapone",
+          "kind": "incarico",
+          "text": "Nomina a difensore di fiducia nel procedimento penale n. 1234/2026 R.G.N.R. della Procura della Repubblica presso il Tribunale di Como (art. 590-bis c.p.).",
+          "sourceRecordingId": null
+        },
+        {
+          "id": "N-0011",
+          "at": "2026-09-28T08:50:00.000Z",
+          "author": "Avv. Vincenzo Sapone",
+          "kind": "nota",
+          "text": "Notificato l'avviso di conclusione delle indagini preliminari (art. 415-bis c.p.p.): valutare memoria difensiva o richiesta di interrogatorio nel termine di venti giorni.",
+          "sourceRecordingId": null
+        }
+      ]
+    },
+    {
+      "id": "M-0005",
+      "clientId": "C-0005",
+      "number": "2026/063",
+      "title": "Ferretti Arredamenti S.n.c. – composizione negoziata della crisi",
+      "status": "in_valutazione",
+      "openedAt": "2026-06-03T13:00:00.000Z",
+      "notes": [
+        {
+          "id": "N-0012",
+          "at": "2026-06-03T13:30:00.000Z",
+          "author": "Avv. Vincenzo Sapone",
+          "kind": "nota",
+          "text": "Primo incontro con i soci: tensione finanziaria dovuta a crediti commerciali insoluti. Valutare l'istanza di nomina dell'esperto per la composizione negoziata (artt. 12 ss. CCII).",
+          "sourceRecordingId": null
+        },
+        {
+          "id": "N-0013",
+          "at": "2026-07-01T09:10:00.000Z",
+          "author": "Avv. Vincenzo Sapone",
+          "kind": "documenti",
+          "text": "Ricevuti i bilanci 2024 e 2025 e la situazione contabile aggiornata al 31/05/2026.",
+          "sourceRecordingId": null
+        }
+      ]
+    },
+    {
+      "id": "M-0006",
+      "clientId": "C-0006",
+      "number": "2025/112",
+      "title": "Brambilla – separazione consensuale",
+      "status": "chiusa",
+      "openedAt": "2025-09-09T08:00:00.000Z",
+      "notes": [
+        {
+          "id": "N-0014",
+          "at": "2025-09-09T08:20:00.000Z",
+          "author": "Avv. Vincenzo Sapone",
+          "kind": "incarico",
+          "text": "Conferito incarico per la separazione consensuale.",
+          "sourceRecordingId": null
+        },
+        {
+          "id": "N-0015",
+          "at": "2026-01-22T11:45:00.000Z",
+          "author": "Avv. Vincenzo Sapone",
+          "kind": "nota",
+          "text": "Procedimento di separazione consensuale definito; pratica chiusa.",
+          "sourceRecordingId": null
+        }
+      ]
+    }
+  ]
+}

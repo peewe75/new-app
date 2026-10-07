@@ -1,0 +1,20 @@
+{
+  "name": "Seguito",
+  "short_name": "Seguito",
+  "description": "Dalla registrazione della chiamata alle azioni dello studio, con l'approvazione dell'avvocato.",
+  "lang": "it",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f5f4f0",
+  "theme_color": "#1f3a5f",
+  "icons": [
+    {
+      "src": "/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

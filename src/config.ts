@@ -9,7 +9,13 @@ export interface AppConfig {
   /** File JSON del gestionale di riferimento (mock finché non c'è l'adattatore reale). */
   caseManagementFile: string;
   server: { host: string; port: number; password: string | null };
-  claude: { model: string; effort: "low" | "medium" | "high" | "xhigh" | "max"; apiKeyPresent: boolean };
+  claude: {
+    model: string;
+    effort: "low" | "medium" | "high" | "xhigh" | "max";
+    /** Limite di token in uscita per ogni analisi. */
+    maxTokens: number;
+    apiKeyPresent: boolean;
+  };
   plaud: { apiBase: string; tokensPath: string; refreshUrl: string; region: string | null };
 }
 
@@ -28,12 +34,14 @@ function envOrNull(name: string): string | null {
 }
 
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+const DEFAULT_MAX_TOKENS = 16000;
 
 export function loadConfig(): AppConfig {
   const lawyerName = env("SEGUITO_LAWYER_NAME", "Avv. Vincenzo Sapone");
   const studioName = env("SEGUITO_STUDIO_NAME", "Studio Legale Sapone");
   const effort = env("SEGUITO_CLAUDE_EFFORT", "high");
   const port = Number.parseInt(env("SEGUITO_PORT", "3000"), 10);
+  const maxTokens = Number.parseInt(env("SEGUITO_CLAUDE_MAX_TOKENS", String(DEFAULT_MAX_TOKENS)), 10);
   return {
     studio: {
       studioName,
@@ -55,6 +63,7 @@ export function loadConfig(): AppConfig {
     claude: {
       model: env("SEGUITO_CLAUDE_MODEL", "claude-opus-5-5"),
       effort: (EFFORTS as readonly string[]).includes(effort) ? (effort as AppConfig["claude"]["effort"]) : "high",
+      maxTokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : DEFAULT_MAX_TOKENS,
       apiKeyPresent: envOrNull("ANTHROPIC_API_KEY") !== null || envOrNull("ANTHROPIC_AUTH_TOKEN") !== null,
     },
     plaud: {
