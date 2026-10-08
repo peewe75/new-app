@@ -22,13 +22,14 @@ App per lo studio dell'Avv. Vincenzo Sapone (Cantù). Dopo una telefonata o una 
 | 10 | **Prima versione con file universali**: `.ics` per il calendario, `.eml` come bozze (X-Unsent), gestionale su file JSON | Funziona subito con qualsiasi calendario e client di posta. I collegamenti diretti (Google o Microsoft, gestionale reale) arrivano dopo, sulle stesse interfacce. |
 | 11 | **Jev (TypeSafe AI)**: non usato per ora | È un modello che sceglie tra opzioni, in cloud USA, e non gira sullo smartphone. Potrebbe servire in futuro come filtro rapido, non come agente. |
 | 12 | **Privacy**: dati in locale (`data/`, `outbox/`) con permessi ristretti; accordi GDPR da firmare con Plaud e Anthropic | Segreto professionale. In alternativa, per l'analisi, si può valutare Claude su AWS Bedrock nella regione UE. |
+| 13 | **Posta e calendario: Microsoft 365** (risposta dell'avvocato, 8 ottobre 2026) | Lo studio usa Outlook. Seguito crea le bozze nella cartella Bozze e gli eventi nel calendario tramite Microsoft Graph. I file `.ics` ed `.eml` restano per la demo e quando Microsoft 365 non è configurato. |
+| 14 | **Telefono: Android** (risposta dell'avvocato) | La PWA si installa da Chrome e può ricevere notifiche push. |
+| 15 | **Hosting: Supabase + Netlify** (scelta dell'avvocato) | Archivio su Supabase (regione UE), interfaccia PWA e funzioni su Netlify. Comporta l'adattamento dell'archivio, del polling e delle analisi lunghe ai limiti delle funzioni serverless; vanno firmati i DPA con Supabase e Netlify. |
+| 16 | **Gestionale**: risposta dell'avvocato «è vecchio e costruito nuovo» | Da chiarire (vedi domande aperte). Finché non è chiarito resta il gestionale su file JSON. |
 
 ## Domande aperte (chiedere all'avvocato)
 
-1. Posta e calendario: Google Workspace o Microsoft 365?
-2. Quale gestionale usa lo studio, e ha un'API?
-3. iPhone o Android?
-4. Dove ospitare l'app: computer dello studio, VPS europeo o Supabase/Netlify?
+1. Gestionale: il gestionale attuale è vecchio e senza API, e ne state costruendo uno nuovo? Chi lo sviluppa, con quale tecnologia (per esempio su Supabase), e Seguito deve scrivere direttamente lì?
 
 ## Prossimi passi
 
