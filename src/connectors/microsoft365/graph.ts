@@ -1,7 +1,8 @@
 /**
  * Client minimo per Microsoft Graph v1.0 (solo fetch): token dall'accesso
  * delegato, nuovi tentativi su 429/503/504 rispettando Retry-After, un rinnovo
- * del token su 401, errori tradotti in italiano senza contenuti della risposta.
+ * del token su 401, identificativi immutabili, errori tradotti in italiano
+ * senza contenuti della risposta.
  */
 import { ConnectorError } from "../../actions/office.js";
 import { Microsoft365AuthError } from "./auth.js";
@@ -13,6 +14,8 @@ export interface GraphClientOptions {
   baseUrl?: string;
   /** Attesa tra i tentativi (sostituibile nei test). */
   sleep?: (ms: number) => Promise<void>;
+  /** Chiamata quando Graph rifiuta anche il token appena rinnovato (collegamento da ripetere). */
+  onAuthFailure?: () => Promise<void>;
 }
 
 const BASE_URL = "https://graph.microsoft.com/v1.0";
@@ -23,8 +26,14 @@ const RETRYABLE: ReadonlySet<number> = new Set([429, 502, 503, 504]);
 /** Per le creazioni si ripete solo quando il servizio dichiara di non aver eseguito la richiesta. */
 const RETRYABLE_POST: ReadonlySet<number> = new Set([429, 503]);
 
+/** Id che non cambiano quando l'elemento si sposta (es. dalla cartella Bozze a Posta inviata). */
+const IMMUTABLE_IDS = { Prefer: 'IdType="ImmutableId"' } as const;
+
 const MESSAGES = {
   unreachable: "Microsoft 365 non risponde: riprovare tra qualche minuto (le azioni non eseguite restano da approvare).",
+  uncertain:
+    "Microsoft 365 non ha confermato l'operazione, che potrebbe essere già stata eseguita: controllare in Outlook " +
+    "(calendario, Bozze o Posta inviata) prima di approvare di nuovo, per non creare un doppione.",
   busy: "Microsoft 365 è sovraccarico e ha chiesto di riprovare più tardi: approvare di nuovo tra qualche minuto.",
   forbidden:
     "Permessi insufficienti su Microsoft 365: verificare che l'applicazione abbia Mail.ReadWrite e Calendars.ReadWrite " +
@@ -52,14 +61,18 @@ export class GraphClient {
     body?: unknown,
     headers: Readonly<Record<string, string>> = {},
   ): Promise<unknown> {
+    // Un solo rinnovo forzato, al tentativo successivo al primo 401.
     let refreshed = false;
+    let forceRefresh = false;
     for (let attempt = 1; ; attempt++) {
-      const token = await this.opts.accessToken(refreshed);
+      const token = await this.opts.accessToken(forceRefresh);
+      forceRefresh = false;
       let response: Response;
       try {
         response = await this.fetchImpl(`${this.baseUrl}${path}`, {
           method,
           headers: {
+            ...IMMUTABLE_IDS,
             ...headers,
             Authorization: `Bearer ${token}`,
             Accept: "application/json",
@@ -69,7 +82,9 @@ export class GraphClient {
           signal: AbortSignal.timeout(TIMEOUT_MS),
         });
       } catch {
-        if (attempt < MAX_ATTEMPTS && method !== "POST") {
+        // Una creazione senza risposta può essere già avvenuta: niente nuovi tentativi.
+        if (method === "POST") throw new ConnectorError(MESSAGES.uncertain);
+        if (attempt < MAX_ATTEMPTS) {
           await this.sleep(backoff(attempt));
           continue;
         }
@@ -82,6 +97,7 @@ export class GraphClient {
       // Token revocato prima della scadenza: un rinnovo, poi si chiede di ricollegare.
       if (response.status === 401 && !refreshed) {
         refreshed = true;
+        forceRefresh = true;
         continue;
       }
       const retryable = method === "POST" ? RETRYABLE_POST : RETRYABLE;
@@ -89,13 +105,15 @@ export class GraphClient {
         await this.sleep(retryAfter(response) ?? backoff(attempt));
         continue;
       }
-      throw await graphError(response);
+      const error = await graphError(response, method);
+      if (error instanceof Microsoft365AuthError) await this.opts.onAuthFailure?.();
+      throw error;
     }
   }
 }
 
 /** Errore di Graph per l'avvocato: stato HTTP e codice di Graph, mai il testo del server. */
-async function graphError(response: Response): Promise<ConnectorError> {
+async function graphError(response: Response, method: string): Promise<ConnectorError> {
   const json: unknown = await response.json().catch(() => null);
   const code =
     typeof json === "object" && json !== null && "error" in json && typeof json.error === "object" && json.error
@@ -107,14 +125,19 @@ async function graphError(response: Response): Promise<ConnectorError> {
   if (graphCode === "MailboxNotEnabledForRESTAPI" || graphCode === "ResourceNotFound") {
     return new ConnectorError(MESSAGES.mailbox);
   }
+  if (method === "POST" && (response.status === 502 || response.status === 504)) {
+    return new ConnectorError(MESSAGES.uncertain);
+  }
   if (RETRYABLE.has(response.status)) return new ConnectorError(MESSAGES.busy);
   const detail = graphCode === null ? `HTTP ${response.status}` : `HTTP ${response.status}, ${graphCode}`;
   return new ConnectorError(`Microsoft 365 ha rifiutato l'operazione (${detail}): verificare i dati e riprovare.`);
 }
 
-/** Attesa indicata dal server (Retry-After in secondi), con un limite. */
+/** Attesa indicata dal server (Retry-After in secondi), con un limite; null se assente. */
 function retryAfter(response: Response): number | null {
-  const seconds = Number(response.headers.get("retry-after"));
+  const raw = response.headers.get("retry-after");
+  if (raw === null || raw.trim() === "") return null;
+  const seconds = Number(raw);
   return Number.isFinite(seconds) && seconds >= 0 ? Math.min(seconds * 1000, MAX_WAIT_MS) : null;
 }
 

@@ -44,6 +44,8 @@ export function createMicrosoft365(
   });
   const graph = new GraphClient({
     accessToken: (forceRefresh) => auth.accessToken(forceRefresh),
+    // Token rifiutato anche dopo il rinnovo: l'interfaccia torna a proporre «Collega Microsoft 365».
+    onAuthFailure: () => auth.disconnect(),
     ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
   });
   return { auth, office: new Microsoft365Office({ graph, transcriptDelivery: config.transcriptDelivery }) };

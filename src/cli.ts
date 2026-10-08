@@ -146,7 +146,7 @@ async function serve(args: string[]): Promise<CommandResult> {
   };
   const services = storedProposalServices(stored, config);
   if (microsoft !== null) {
-    services.microsoft365 = microsoftServices(microsoft);
+    services.microsoft365 = microsoftServices(microsoft, config);
     await printMicrosoftStatus(microsoft, config);
   }
   const plaudLinked = existsSync(config.plaud.tokensPath);
@@ -296,8 +296,9 @@ function storedProposalServices(deps: StoredProposalDeps, config: AppConfig): Ap
   };
 }
 
-function microsoftServices({ auth }: Microsoft365): NonNullable<AppServices["microsoft365"]> {
+function microsoftServices({ auth }: Microsoft365, config: AppConfig): NonNullable<AppServices["microsoft365"]> {
   return {
+    redirectOrigin: new URL(config.microsoft365.redirectUri).origin,
     status: () => auth.status(),
     authorizationUrl: () => auth.authorizationUrl(),
     complete: (query) => auth.complete(query),
@@ -316,9 +317,19 @@ async function printMicrosoftStatus({ auth }: Microsoft365, config: AppConfig): 
     return;
   }
   const callback = new URL(config.microsoft365.redirectUri);
+  const { host, port } = config.server;
+  const wildcard = host === "0.0.0.0" || host === "::";
+  if (LOOPBACK_HOSTS.has(callback.hostname) && !LOOPBACK_HOSTS.has(host) && !wildcard) {
+    console.error(
+      `Attenzione: con SEGUITO_HOST=${host} il collegamento a Microsoft 365 non può completarsi, perché Microsoft ` +
+        `torna a ${callback.origin}, che su questo computer non risponde. Impostare SEGUITO_HOST=0.0.0.0 ` +
+        `(con SEGUITO_PASSWORD) e collegare l'account dal computer dello studio, all'indirizzo http://localhost:${port}/.`,
+    );
+    return;
+  }
   console.log(
-    `Microsoft 365 configurato ma non collegato: aprire ${callback.origin}/ e scegliere «Collega Microsoft 365». ` +
-      "Fino ad allora le azioni di calendario ed email restano da eseguire.",
+    `Microsoft 365 configurato ma non collegato: aprire ${callback.origin}/ su questo computer e scegliere ` +
+      "«Collega Microsoft 365». Fino ad allora le azioni di calendario ed email restano da eseguire.",
   );
 }
 

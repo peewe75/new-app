@@ -333,12 +333,57 @@ describe("GraphClient", () => {
 
     const offline = fakeFetch(() => new TypeError("fetch failed"));
     const graph3 = new GraphClient({ accessToken: async () => "AT", fetchImpl: offline.fetchImpl, sleep: async () => {} });
-    await expect(graph3.request("POST", "/me/messages", {})).rejects.toThrow(/non risponde/);
+    await expect(graph3.request("GET", "/me")).rejects.toThrow(/non risponde/);
+    expect(offline.calls).toHaveLength(4);
 
     const expired = fakeFetch(() => ({ status: 401 }));
-    const graph4 = new GraphClient({ accessToken: async () => "AT", fetchImpl: expired.fetchImpl, sleep: async () => {} });
+    const onAuthFailure = vi.fn(async () => undefined);
+    const graph4 = new GraphClient({
+      accessToken: async () => "AT",
+      fetchImpl: expired.fetchImpl,
+      sleep: async () => {},
+      onAuthFailure,
+    });
     await expect(graph4.request("GET", "/me")).rejects.toBeInstanceOf(Microsoft365AuthError);
     expect(expired.calls).toHaveLength(2);
+    expect(onAuthFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("per una creazione senza conferma avvisa che potrebbe essere già avvenuta, senza ripeterla", async () => {
+    for (const reply of [new TypeError("fetch failed"), { status: 504 }, { status: 502 }] as Reply[]) {
+      const { calls, fetchImpl } = fakeFetch(() => reply);
+      const graph = new GraphClient({ accessToken: async () => "AT", fetchImpl, sleep: async () => {} });
+      const error = await graph.request("POST", "/me/messages", {}).catch((err: unknown) => err);
+      expect(error).toBeInstanceOf(ConnectorError);
+      expect((error as Error).message).toMatch(/potrebbe essere già stata eseguita.*prima di approvare di nuovo/);
+      expect(calls).toHaveLength(1);
+    }
+  });
+
+  it("senza Retry-After attende sempre di più tra un tentativo e l'altro", async () => {
+    for (const method of ["GET", "POST"] as const) {
+      const { calls, fetchImpl } = fakeFetch(() => ({ status: 503, headers: { "Retry-After": "" } }));
+      const sleep = vi.fn(async (_ms: number) => undefined);
+      const graph = new GraphClient({ accessToken: async () => "AT", fetchImpl, sleep });
+      await expect(graph.request(method, "/me/events", method === "POST" ? {} : undefined)).rejects.toThrow(/sovraccarico/);
+      expect(calls).toHaveLength(4);
+      expect(sleep.mock.calls.map((args) => args[0])).toEqual([1000, 2000, 4000]);
+    }
+  });
+
+  it("rinnova il token una sola volta anche se seguono altri tentativi, e chiede id immutabili", async () => {
+    const replies: Reply[] = [
+      { status: 401 },
+      { status: 429, headers: { "Retry-After": "1" } },
+      { status: 429 },
+      { status: 201, json: { id: "x" } },
+    ];
+    const { calls, fetchImpl } = fakeFetch(() => replies.shift() ?? { status: 500 });
+    const accessToken = vi.fn(async (_force?: boolean) => "AT");
+    const graph = new GraphClient({ accessToken, fetchImpl, sleep: async () => {} });
+    await graph.request("POST", "/me/events", {});
+    expect(accessToken.mock.calls.map((args) => args[0])).toEqual([false, true, false, false]);
+    expect(calls.every((c) => c.headers.Prefer === 'IdType="ImmutableId"')).toBe(true);
   });
 });
 
@@ -490,6 +535,17 @@ describe("Microsoft365Office", () => {
   it("omette gli allegati oltre 3 MB e ignora collegamenti non https", async () => {
     const { graph, requests } = graphRecorder({ "/me/messages": { id: "m1", webLink: "javascript:alert(1)" } });
     const office = new Microsoft365Office({ graph, transcriptDelivery: "bozza" });
+    // Allegato entro 3 MB ma, con il testo, oltre il limite dell'intera richiesta.
+    const longText = "y".repeat(2 * 1024 * 1024);
+    await office.createDraft({
+      label: "Bozza email: Trascrizione",
+      to: [],
+      subject: "Trascrizione",
+      text: longText,
+      attachments: [{ filename: "trascrizione.txt", contentType: "text/plain", content: longText }],
+    });
+    expect(requests[0]?.body).not.toHaveProperty("attachments");
+    requests.length = 0;
     const big = "x".repeat(3 * 1024 * 1024);
     const artifact = await office.createDraft({
       label: "Bozza email: Trascrizione",

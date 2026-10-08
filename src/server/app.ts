@@ -38,6 +38,8 @@ export interface AppServices {
 }
 
 export interface Microsoft365Services {
+  /** Origine dell'indirizzo di ritorno registrato: il collegamento si avvia solo da lì. */
+  readonly redirectOrigin: string;
   status(): Promise<{ connected: boolean; account: string | null }>;
   /** Pagina di accesso Microsoft a cui inviare il browser. */
   authorizationUrl(): string;
@@ -214,7 +216,7 @@ function findRoute(ctx: AppContext, segments: readonly string[]): Route | null {
   if (first === "static" && count === 2 && second !== undefined) return get((_req, res) => serveUiFile(res, second));
   if (first === "outbox") return get((_req, res) => serveOutboxFile(res, ctx.services.outboxDir, segments.slice(1)));
   if (first === "auth" && second === "microsoft") {
-    if (count === 2) return get((_req, res) => startMicrosoftLogin(ctx, res));
+    if (count === 2) return get((req, res) => startMicrosoftLogin(ctx, req, res));
     if (count === 3 && third === "callback") return get((req, res) => finishMicrosoftLogin(ctx, req, res));
     return null;
   }
@@ -246,7 +248,10 @@ async function publicConfig(ctx: AppContext): Promise<Record<string, unknown>> {
     timezone: studio.timezone,
     syncAvailable: ctx.sync !== null,
     // null: Microsoft 365 non configurato; altrimenti stato del collegamento.
-    microsoft365: microsoft365 === undefined ? null : await microsoft365.status(),
+    microsoft365:
+      microsoft365 === undefined
+        ? null
+        : { ...(await microsoft365.status()), redirectOrigin: microsoft365.redirectOrigin },
   };
 }
 
@@ -256,7 +261,14 @@ function requireMicrosoft(ctx: AppContext): Microsoft365Services {
   return microsoft;
 }
 
-async function startMicrosoftLogin(ctx: AppContext, res: ServerResponse): Promise<void> {
+/**
+ * Avvio del collegamento solo dall'interfaccia di Seguito o digitando l'indirizzo:
+ * una pagina esterna non deve poter generare richieste di accesso (che
+ * scalzerebbero quella in corso dell'avvocato).
+ */
+async function startMicrosoftLogin(ctx: AppContext, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const site = req.headers["sec-fetch-site"];
+  if (site !== undefined && site !== "same-origin" && site !== "none") throw new HttpError(403, MESSAGES.crossOrigin);
   const url = requireMicrosoft(ctx).authorizationUrl();
   res.writeHead(302, { Location: url });
   res.end();

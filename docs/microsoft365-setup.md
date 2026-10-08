@@ -56,7 +56,9 @@ SEGUITO_M365_CLIENT_SECRET=<valore del segreto>
 # SEGUITO_TRASCRIZIONE=invio
 ```
 
-Avvia Seguito con `npm run serve`, apri **<http://localhost:3000>** (proprio `localhost`, lo stesso nome dell'indirizzo di reindirizzamento) e premi **Collega Microsoft 365**. Accedi con l'account dell'avvocato: Seguito torna all'elenco con «Microsoft 365 collegato».
+Avvia Seguito con `npm run serve`, apri **<http://localhost:3000>** sul computer che esegue Seguito (proprio `localhost`, lo stesso nome dell'indirizzo di reindirizzamento) e premi **Collega Microsoft 365**. Accedi con l'account dell'avvocato: Seguito torna all'elenco con «Microsoft 365 collegato».
+
+Il collegamento si fa una volta sola da quel computer: Microsoft riporta il browser all'indirizzo registrato, e dal telefono `localhost` indicherebbe il telefono stesso. Aperto da un altro dispositivo, Seguito lo spiega al posto del pulsante. Se Seguito è in ascolto su un indirizzo di rete specifico, all'avvio segnala che il collegamento non può completarsi e indica come procedere (`SEGUITO_HOST=0.0.0.0` con `SEGUITO_PASSWORD`).
 
 I token restano nel file `data/microsoft365.json` (o in `SEGUITO_M365_TOKENS_FILE`), leggibile solo dall'utente che esegue Seguito, e si rinnovano da soli a ogni uso. Il collegamento scade dopo 90 giorni senza utilizzo, o prima se la password dell'account viene cambiata o le sessioni vengono revocate: in quel caso Seguito chiede di ricollegarlo. **Scollega**, nell'elenco delle registrazioni, cancella il file.
 
@@ -79,7 +81,8 @@ Outlook ammette un solo promemoria per evento: Seguito usa il più importante (u
 
 | Messaggio | Che cosa fare |
 |---|---|
-| «Microsoft 365 non è collegato» | Premi **Collega Microsoft 365** e approva di nuovo le azioni rimaste in errore: quelle già eseguite non si ripetono. |
+| «Microsoft 365 non è collegato» | Premi **Collega Microsoft 365** e approva di nuovo le azioni rimaste in errore: quelle già eseguite non si ripetono. **Ricollega**, accanto a «Microsoft 365 collegato», rinnova l'accesso senza scollegare. |
+| «Microsoft 365 non ha confermato l'operazione, che potrebbe essere già stata eseguita» | La rete o il servizio non hanno risposto dopo l'invio della richiesta. Controlla in Outlook (calendario, Bozze o Posta inviata): se l'elemento c'è, non approvare di nuovo quell'azione. Gli eventi hanno comunque un identificativo che impedisce i doppioni. |
 | «Il collegamento a Microsoft 365 è scaduto o è stato revocato» | Il collegamento dura finché viene usato; dopo un lungo periodo di inattività, o se la password è cambiata, va ripetuto. |
 | «Credenziali dell'applicazione Microsoft non valide» | Il segreto è scaduto o è stato copiato male: creane uno nuovo (passo 2). |
 | «L'applicazione non ha ancora i permessi richiesti» | Manca il consenso amministratore (passo 3). |

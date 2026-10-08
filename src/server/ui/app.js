@@ -527,6 +527,7 @@ async function navigate() {
   main.replaceChildren(h("p", { class: "loading", text: "Caricamento…" }));
   const route = currentRoute();
   try {
+    if (state.config.microsoft365) await reloadConfig();
     if (route.name === "detail") {
       const detail = await api(`/api/proposals/${encodeURIComponent(route.id)}`);
       if (token !== state.renderToken) return;
@@ -625,23 +626,46 @@ function microsoftPanel() {
       "Microsoft 365 collegato",
       microsoft.account ? h("span", { class: "connection__account", text: microsoft.account }) : null,
     ),
+    canConnectHere()
+      ? h("a", { class: "btn btn--link", href: "/auth/microsoft", text: "Ricollega" })
+      : null,
     h("button", { type: "button", class: "btn btn--link", text: "Scollega", onclick: disconnectMicrosoft }),
   );
 }
 
+/**
+ * Microsoft riporta il browser all'indirizzo di ritorno registrato (di solito
+ * http://localhost): il collegamento funziona solo aperto da quell'indirizzo.
+ */
+function canConnectHere() {
+  const origin = state.config.microsoft365?.redirectOrigin;
+  return !origin || origin === window.location.origin;
+}
+
 function connectMicrosoftBanner(tone) {
-  const node = banner(
-    tone,
-    tone === "info" ? "Collega Microsoft 365" : "Microsoft 365 non collegato",
-    tone === "info"
+  const here = canConnectHere();
+  const text = !here
+    ? `Il collegamento si fa una volta sola dal computer dello studio, aprendo Seguito all'indirizzo ${state.config.microsoft365.redirectOrigin}.`
+    : tone === "info"
       ? "Gli eventi e le bozze delle azioni approvate vanno direttamente nel calendario e nella posta di Outlook."
       : "Finché l'account non è collegato, le azioni di calendario ed email non possono essere eseguite: " +
-          "restano da approvare e si eseguono dopo il collegamento.",
-  );
-  node.querySelector(".banner__body")?.append(
-    h("a", { class: "btn btn--primary banner__action", href: "/auth/microsoft" }, "Collega Microsoft 365"),
-  );
+          "restano da approvare e si eseguono dopo il collegamento.";
+  const node = banner(tone, tone === "info" ? "Collega Microsoft 365" : "Microsoft 365 non collegato", text);
+  if (here) {
+    node.querySelector(".banner__body")?.append(
+      h("a", { class: "btn btn--primary banner__action", href: "/auth/microsoft" }, "Collega Microsoft 365"),
+    );
+  }
   return node;
+}
+
+/** Rilegge lo stato del collegamento (può cambiare durante un'approvazione). */
+async function reloadConfig() {
+  try {
+    state.config = { ...state.config, ...(await api("/api/config")) };
+  } catch {
+    // Si resta con la configurazione già nota.
+  }
 }
 
 async function disconnectMicrosoft() {
@@ -652,9 +676,9 @@ async function disconnectMicrosoft() {
   if (!confirmed) return;
   try {
     await api("/api/microsoft365/disconnect", { method: "POST" });
-    state.config = { ...state.config, ...(await api("/api/config")) };
-    announce("Microsoft 365 scollegato.");
     await navigate();
+    // Dopo la navigazione, che svuota le notifiche.
+    announce("Microsoft 365 scollegato.");
   } catch (error) {
     showError(error.message);
   }
@@ -1584,6 +1608,8 @@ async function approveSelected() {
     const body = Object.keys(edits).length > 0 ? { actionIds, edits } : { actionIds };
     const updated = await api(`/api/proposals/${encodeURIComponent(proposal.id)}/approve`, { method: "POST", body });
     state.detail = { ...state.detail, proposal: updated };
+    // Un collegamento scaduto durante l'esecuzione deve tornare a proporre «Collega Microsoft 365».
+    if (state.config.microsoft365) await reloadConfig();
     renderDetail();
     announce(resultsSummary(updated.executions.slice(previousCount)));
     const outcome = document.getElementById("esito");

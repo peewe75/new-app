@@ -26,6 +26,8 @@ export interface Microsoft365OfficeOptions {
 
 /** Limite di Graph per gli allegati inviati insieme al messaggio (3 MB). */
 const MAX_INLINE_ATTACHMENTS_BYTES = 3 * 1024 * 1024;
+/** Margine sotto il limite di 4 MB per l'intera richiesta (testo compreso). */
+const MAX_REQUEST_BYTES = 3.5 * 1024 * 1024;
 const CATEGORY = "Seguito";
 
 /**
@@ -122,8 +124,11 @@ function eventTimes(spec: CalendarEventSpec, timeZone: string): Record<string, u
 
 function graphMessage(spec: MessageSpec): Record<string, unknown> {
   const attachments = spec.attachments ?? [];
-  const fits = attachments.reduce((sum, a) => sum + base64Length(a.content), 0) <= MAX_INLINE_ATTACHMENTS_BYTES;
-  const omitted = fits ? "" : `\n\n(Allegati omessi perché superano il limite di 3 MB di Microsoft 365: il testo completo è qui sopra.)`;
+  const attachmentBytes = attachments.reduce((sum, a) => sum + base64Length(a.content), 0);
+  const fits =
+    attachmentBytes <= MAX_INLINE_ATTACHMENTS_BYTES &&
+    attachmentBytes + Buffer.byteLength(spec.text, "utf8") <= MAX_REQUEST_BYTES;
+  const omitted = fits ? "" : `\n\n(Allegati omessi perché superano i limiti di dimensione di Microsoft 365: il testo completo è qui sopra.)`;
   return {
     subject: spec.subject,
     body: { contentType: "text", content: `${spec.text}${omitted}` },

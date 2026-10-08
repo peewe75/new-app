@@ -668,6 +668,7 @@ describe("server con Microsoft 365", () => {
     let connected = false;
     const harness = createHarness(outboxDir, {
       microsoft365: {
+        redirectOrigin: "http://localhost:3000",
         status: async () => ({ connected, account: connected ? "avvocato@studio.example" : null }),
         authorizationUrl: () => "https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize?state=abc",
         complete: async (query) => {
@@ -690,9 +691,17 @@ describe("server con Microsoft 365", () => {
     const server = await start(harness.services);
     try {
       const before = (await send(server.port, "GET", "/api/config")).json<{ microsoft365: unknown }>();
-      expect(before.microsoft365).toEqual({ connected: false, account: null });
+      expect(before.microsoft365).toEqual({ connected: false, account: null, redirectOrigin: "http://localhost:3000" });
 
-      const login = await send(server.port, "GET", "/auth/microsoft");
+      // Una pagina esterna non può avviare richieste di accesso.
+      for (const site of ["cross-site", "same-site"]) {
+        const blocked = await send(server.port, "GET", "/auth/microsoft", { headers: { "Sec-Fetch-Site": site } });
+        expect(blocked.status, site).toBe(403);
+      }
+      const typed = await send(server.port, "GET", "/auth/microsoft", { headers: { "Sec-Fetch-Site": "none" } });
+      expect(typed.status).toBe(302);
+
+      const login = await send(server.port, "GET", "/auth/microsoft", { headers: { "Sec-Fetch-Site": "same-origin" } });
       expect(login.status).toBe(302);
       expect(login.headers.location).toBe("https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize?state=abc");
       expectSecurityHeaders(login);
@@ -703,7 +712,11 @@ describe("server con Microsoft 365", () => {
       expect(calls.complete).toEqual(["code=CODICE&state=abc"]);
 
       const after = (await send(server.port, "GET", "/api/config")).json<{ microsoft365: unknown }>();
-      expect(after.microsoft365).toEqual({ connected: true, account: "avvocato@studio.example" });
+      expect(after.microsoft365).toEqual({
+        connected: true,
+        account: "avvocato@studio.example",
+        redirectOrigin: "http://localhost:3000",
+      });
 
       const disconnect = await postJson(server.port, "/api/microsoft365/disconnect", {});
       expect(disconnect.status).toBe(200);
