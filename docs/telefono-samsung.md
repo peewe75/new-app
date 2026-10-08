@@ -9,7 +9,7 @@ registra la chiamata ─► trova il file e chiede ─► trascrizione ─► an
                                     ◄──────── notifica «Proposta pronta» ─────────┘
 ```
 
-L'app legge soltanto la cartella che le indichi e non modifica né cancella le registrazioni. Sul server l'audio viene cancellato appena la trascrizione è archiviata: resta solo il testo.
+L'app legge soltanto le chiamate registrate (la cartella *Call*, mai le note vocali del Registratore vocale) e non modifica né cancella le registrazioni. Sul server l'audio viene cancellato appena la trascrizione è archiviata: resta solo il testo.
 
 ## Cosa serve
 
@@ -39,7 +39,7 @@ Nell'app l'indirizzo è quello del computer nella rete dello studio, per esempio
 2. Nel file `.env` del computer imposta `SEGUITO_HOST=0.0.0.0` e `SEGUITO_PASSWORD`. Se usi il nome del computer al posto dell'indirizzo, aggiungilo anche a `SEGUITO_ALLOWED_HOSTS`, per esempio `SEGUITO_ALLOWED_HOSTS=pc-studio.tail1234.ts.net`.
 3. Nell'app usa l'indirizzo Tailscale del computer, per esempio `http://100.101.102.103:3000` o `http://pc-studio.tail1234.ts.net:3000`.
 
-Con HTTP l'app accetta solo indirizzi della rete dello studio o di Tailscale: su Internet la password sarebbe leggibile. Quando Seguito sarà pubblicato online con HTTPS basterà indicare quell'indirizzo.
+Con HTTP l'app accetta solo indirizzi della rete dello studio o di Tailscale: su Internet la password sarebbe leggibile. Se usi un nome (per esempio `pc-studio.lan` o `….ts.net`), prima di ogni invio l'app controlla che porti davvero a un indirizzo della rete dello studio o di Tailscale; su una rete estranea l'invio viene bloccato. L'indirizzo IP del computer è la scelta più semplice. Quando Seguito sarà pubblicato online con HTTPS basterà indicare quell'indirizzo.
 
 ## Installare l'app
 
@@ -54,11 +54,14 @@ Con HTTP l'app accetta solo indirizzi della rete dello studio o di Tailscale: su
 ## Configurare l'app
 
 1. **Collegamento a Seguito**: indirizzo e password (`SEGUITO_PASSWORD`), poi **Salva e verifica**. Il messaggio «pronto a ricevere le registrazioni» conferma che il server ha trascrizione e analisi attive.
-2. **Cartella delle registrazioni**: **Scegli la cartella**, poi **Recordings** (o **Recordings/Call**) nella memoria interna, e **Usa questa cartella**. Se la cartella *Call* non c'è ancora, fai prima una chiamata di prova registrata. Le registrazioni già presenti non vengono inviate: compaiono nell'elenco e, se serve, si inviano a mano.
+2. **Cartella delle registrazioni**: **Scegli la cartella**, poi **Recordings** (o **Recordings/Call**) nella memoria interna, e **Usa questa cartella**. L'app legge solo la sottocartella *Call*: le note vocali e le riunioni registrate con il Registratore vocale non vengono mai lette. Se la cartella *Call* non c'è ancora, fai prima una chiamata di prova registrata. Le registrazioni già presenti non vengono inviate: compaiono nell'elenco e, se serve, si inviano a mano.
 3. **Invio**:
    - **Chiedi conferma per ogni chiamata** (consigliato): dopo ogni chiamata registrata arriva una notifica con **Invia a Seguito** e **Non inviare**;
    - **Invia in automatico**: le registrazioni partono da sole.
    - Restano sempre esclusi i contatti salvati come «Avv. …», «Avvocato …» o «Studio legale …» (art. 38, comma 2, del Codice deontologico forense) e i nomi o numeri dell'elenco **Non inviare mai**.
+   - Nell'elenco **Non inviare mai**, per chi è in rubrica scrivi il **nome** come è salvato: per i contatti in rubrica il Samsung mette nel nome del file solo il nome, non il numero. I numeri servono per chi non è in rubrica.
+   - Le esclusioni si ricontrollano anche al momento dell'invio: un nome aggiunto all'elenco blocca anche le registrazioni già in coda. Finché una registrazione è in coda puoi toccare **Annulla l'invio**.
+   - Con il telefono bloccato, **Invia a Seguito** nella notifica chiede prima lo sblocco.
 4. **Permessi**: consenti le notifiche. Il permesso **Rileva la fine delle chiamate** è facoltativo: con quello l'app cerca la registrazione appena finisce la chiamata; senza, controlla ogni 15 minuti e quando la apri.
 
 Il Samsung può limitare le app in background per risparmiare batteria. Se le notifiche arrivano in ritardo: **Impostazioni → Batteria → Limiti di utilizzo in background** e togli Seguito dalle app in sospensione, oppure, nelle informazioni dell'app, **Batteria → Senza restrizioni**.

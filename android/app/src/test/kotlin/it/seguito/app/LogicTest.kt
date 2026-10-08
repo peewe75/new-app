@@ -37,6 +37,14 @@ class CallFileTest {
         assertEquals("audio/mp4", CallFile.mimeType("a.m4a"))
         assertEquals("application/octet-stream", CallFile.mimeType("a.xyz"))
     }
+
+    @Test
+    fun leggeSoloLaCartellaDelleChiamate() {
+        assertTrue(CallFile.isCallFolder("Call"))
+        assertTrue(CallFile.isCallFolder("call recordings"))
+        assertFalse(CallFile.isCallFolder("Voice Recorder"))
+        assertFalse(CallFile.isCallFolder("Recordings"))
+    }
 }
 
 class ExclusionsTest {
@@ -60,6 +68,13 @@ class ExclusionsTest {
         assertEquals(Exclusions.Reason.ELENCO, Exclusions.reason(info(null, "3331234567"), true, rules))
         assertEquals(Exclusions.Reason.ELENCO, Exclusions.reason(info(null, "+393331234567"), true, rules))
         assertNull(Exclusions.reason(info(null, "+393339999999"), true, rules))
+    }
+
+    @Test
+    fun riconosceINumeriCortiConIlPrefisso() {
+        val rules = listOf("06 123456")
+        assertEquals(Exclusions.Reason.ELENCO, Exclusions.reason(info(null, "+3906123456"), true, rules))
+        assertNull(Exclusions.reason(info(null, "+3906654321"), true, rules))
     }
 }
 
@@ -88,5 +103,17 @@ class ServerUrlTest {
         assertTrue(ServerUrl.validate("https://seguito.example.it/?x=1") is ServerUrl.Result.Invalid)
         assertFalse(ServerUrl.isPrivateHost("172.32.0.1"))
         assertTrue(ServerUrl.isPrivateHost("172.16.0.1"))
+    }
+
+    @Test
+    fun riconosceGliIndirizziRisoltiDellaReteDelloStudio() {
+        fun private(ip: String) = ServerUrl.isPrivateAddress(java.net.InetAddress.getByName(ip))
+        assertTrue(private("192.168.1.20"))
+        assertTrue(private("100.101.102.103"))
+        assertTrue(private("fd7a:115c:a1e0::1"))
+        assertFalse(private("8.8.8.8"))
+        assertFalse(private("100.128.0.1"))
+        assertFalse(private("2001:4860:4860::8888"))
+        assertFalse(ServerUrl.isPrivateIpv4("pc-studio.lan"))
     }
 }

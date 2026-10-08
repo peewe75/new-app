@@ -22,13 +22,21 @@ object Exclusions {
             val ruleDigits = rule.filter { it.isDigit() }
             val looksLikeNumber = ruleDigits.length >= 6 && rule.all { it.isDigit() || it in "+ ()-." }
             if (looksLikeNumber) {
-                // Confronto sulle ultime 9 cifre: stesso numero con o senza prefisso internazionale.
-                if (digits != null && digits.takeLast(9) == ruleDigits.takeLast(9)) return Reason.ELENCO
+                // Confronto sulle ultime cifre (fino a 9): stesso numero con o senza prefisso internazionale.
+                val n = minOf(9, ruleDigits.length, digits?.length ?: 0)
+                if (digits != null && n >= 6 && digits.takeLast(n) == ruleDigits.takeLast(n)) return Reason.ELENCO
             } else if (contact != null && contact.contains(rule.lowercase())) {
                 return Reason.ELENCO
             }
         }
         return null
+    }
+
+    /** Spiegazione mostrata nell'elenco delle registrazioni. */
+    fun message(reason: Reason): String = when (reason) {
+        Reason.COLLEGA ->
+            "Contatto avvocato: non inviata (art. 38, comma 2, CDF: le telefonate con i colleghi non si registrano)."
+        Reason.ELENCO -> "Nell'elenco «Non inviare mai»."
     }
 
     /** Regole da testo libero: una per riga o separate da virgole. */

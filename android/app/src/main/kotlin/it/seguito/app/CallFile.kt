@@ -31,6 +31,15 @@ object CallFile {
     private val phone = Regex("""^\+?[\d\s().-]{6,}$""")
     private val audioExtensions = setOf("m4a", "mp3", "amr", "3gp", "aac", "wav", "ogg", "opus", "mp4")
 
+    private val callFolder = Regex("""^call(\s*recordings?)?$""", RegexOption.IGNORE_CASE)
+
+    /**
+     * Cartella delle chiamate registrate: sul Samsung «Recordings/Call». Le altre
+     * cartelle di Recordings (per esempio «Voice Recorder», note vocali e
+     * riunioni registrate) non si leggono mai.
+     */
+    fun isCallFolder(name: String): Boolean = callFolder.matches(name.trim())
+
     fun isAudio(fileName: String): Boolean =
         fileName.substringAfterLast('.', "").lowercase() in audioExtensions
 

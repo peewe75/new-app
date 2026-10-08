@@ -5,8 +5,12 @@ import org.json.JSONObject
 import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
+import java.net.InetAddress
 import java.net.URL
 import java.net.URLEncoder
+
+/** HTTP verso un nome che non porta alla rete dello studio o a Tailscale: password e audio viaggerebbero in chiaro. */
+class InsecureHostException(message: String) : IOException(message)
 
 /** Chiamate al server di Seguito, con la password dello studio (autenticazione HTTP Basic). */
 class SeguitoClient(private val baseUrl: String, private val password: String) {
@@ -44,8 +48,9 @@ class SeguitoClient(private val baseUrl: String, private val password: String) {
     }
 
     @Throws(IOException::class)
-    fun upload(input: InputStream, size: Long, fileName: String, lastModified: Long, mimeType: String): Response {
-        val query = "nome=${URLEncoder.encode(fileName, "UTF-8")}&modificato=$lastModified"
+    fun upload(input: InputStream, size: Long, fileName: String, lastModified: Long, durationMs: Long?, mimeType: String): Response {
+        val query = "nome=${URLEncoder.encode(fileName, "UTF-8")}&modificato=$lastModified" +
+            (if (durationMs != null && durationMs > 0) "&durata=$durationMs" else "")
         val connection = open("POST", "/api/telefono/registrazioni?$query")
         try {
             connection.doOutput = true
@@ -69,7 +74,9 @@ class SeguitoClient(private val baseUrl: String, private val password: String) {
     }
 
     private fun open(method: String, path: String): HttpURLConnection {
-        val connection = URL("$baseUrl$path").openConnection() as HttpURLConnection
+        val url = URL("$baseUrl$path")
+        checkCleartextTarget(url)
+        val connection = url.openConnection() as HttpURLConnection
         connection.requestMethod = method
         connection.connectTimeout = 15_000
         connection.readTimeout = 30_000
@@ -78,6 +85,23 @@ class SeguitoClient(private val baseUrl: String, private val password: String) {
         connection.setRequestProperty("Authorization", "Basic $credentials")
         connection.setRequestProperty("Accept", "application/json")
         return connection
+    }
+
+    /**
+     * Con HTTP un nome (es. pc-studio.lan) deve portare a un indirizzo privato o di
+     * Tailscale: su una rete estranea un DNS ostile potrebbe indirizzarlo a Internet.
+     */
+    private fun checkCleartextTarget(url: URL) {
+        if (url.protocol != "http") return
+        val host = url.host.trim('[', ']')
+        if (ServerUrl.isPrivateIpv4(host)) return
+        val addresses = InetAddress.getAllByName(host)
+        if (addresses.isEmpty() || !addresses.all { ServerUrl.isPrivateAddress(it) }) {
+            throw InsecureHostException(
+                "Il nome $host non porta alla rete dello studio o a Tailscale: invio bloccato per non mandare la password in chiaro. " +
+                    "Usare l'indirizzo IP del computer o HTTPS.",
+            )
+        }
     }
 
     private fun read(connection: HttpURLConnection): Response {

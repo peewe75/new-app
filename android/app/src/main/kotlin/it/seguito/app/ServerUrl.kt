@@ -1,5 +1,8 @@
 package it.seguito.app
 
+import java.net.Inet4Address
+import java.net.Inet6Address
+import java.net.InetAddress
 import java.net.URI
 
 /**
@@ -45,11 +48,27 @@ object ServerUrl {
         }
     }
 
+    /** Indirizzo risolto nella rete dello studio o di Tailscale (IPv4 privati e 100.64.0.0/10, IPv6 ULA). */
+    fun isPrivateAddress(address: InetAddress): Boolean {
+        if (address.isLoopbackAddress || address.isSiteLocalAddress || address.isLinkLocalAddress) return true
+        val bytes = address.address
+        return when (address) {
+            is Inet4Address -> (bytes[0].toInt() and 0xFF) == 100 && (bytes[1].toInt() and 0xC0) == 64
+            is Inet6Address -> (bytes[0].toInt() and 0xFE) == 0xFC
+            else -> false
+        }
+    }
+
     /** Reti private IPv4, Tailscale (100.64.0.0/10 e *.ts.net) e nomi locali (.lan, .local). */
     fun isPrivateHost(host: String): Boolean {
         val h = host.lowercase().trim('[', ']')
         if (h.endsWith(".ts.net") || h.endsWith(".lan") || h.endsWith(".local") || h.endsWith(".home.arpa")) return true
-        val parts = h.split('.').map { it.toIntOrNull() ?: return false }
+        return isPrivateIpv4(h)
+    }
+
+    /** Indirizzo IPv4 scritto in cifre, in una rete privata o di Tailscale. */
+    fun isPrivateIpv4(host: String): Boolean {
+        val parts = host.split('.').map { it.toIntOrNull() ?: return false }
         if (parts.size != 4 || parts.any { it !in 0..255 }) return false
         val (a, b) = parts
         return a == 10 ||

@@ -17,12 +17,15 @@ object Scanner {
         Document.COLUMN_LAST_MODIFIED,
     )
 
-    /** Registrazioni nella cartella e nelle sottocartelle (fino a due livelli, es. Recordings/Call). */
+    /**
+     * Chiamate registrate nella cartella scelta: se è «Recordings» si legge solo
+     * la sottocartella «Call» (mai le note vocali); se è già «Call», tutti i suoi file.
+     */
     fun scan(context: Context, treeUri: Uri): List<FoundFile> {
         val resolver = context.contentResolver
         val found = mutableListOf<FoundFile>()
 
-        fun visit(parentId: String, depth: Int) {
+        fun visit(parentId: String, depth: Int, inCalls: Boolean) {
             val children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
             resolver.query(children, projection, null, null, null)?.use { cursor ->
                 while (cursor.moveToNext()) {
@@ -30,8 +33,8 @@ object Scanner {
                     val name = cursor.getString(1) ?: continue
                     val mime = cursor.getString(2)
                     if (mime == Document.MIME_TYPE_DIR) {
-                        if (depth < 2) visit(id, depth + 1)
-                    } else if (CallFile.isAudio(name)) {
+                        if (depth < 2) visit(id, depth + 1, inCalls || CallFile.isCallFolder(name))
+                    } else if (inCalls && CallFile.isAudio(name)) {
                         found += FoundFile(
                             docId = id,
                             uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id),
@@ -44,7 +47,8 @@ object Scanner {
             }
         }
 
-        visit(DocumentsContract.getTreeDocumentId(treeUri), 0)
+        val rootId = DocumentsContract.getTreeDocumentId(treeUri)
+        visit(rootId, 0, CallFile.isCallFolder(rootId.substringAfter(':').substringAfterLast('/')))
         return found
     }
 

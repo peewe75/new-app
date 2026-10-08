@@ -1,6 +1,7 @@
 package it.seguito.app
 
 import android.content.Context
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
@@ -15,6 +16,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.FileNotFoundException
 import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
@@ -42,6 +44,11 @@ object Jobs {
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork("invio-$docId", ExistingWorkPolicy.KEEP, request)
+    }
+
+    /** Annulla un invio ancora in coda. */
+    fun cancelUpload(context: Context, docId: String) {
+        WorkManager.getInstance(context).cancelUniqueWork("invio-$docId")
     }
 
     fun watchStatus(context: Context, docId: String, delayMinutes: Long = 1) {
@@ -77,9 +84,9 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         val now = System.currentTimeMillis()
         var stillWriting = false
         for (file in files) {
-            if (RecordingStore.get(file.docId) != null) continue
-            // Un file modificato negli ultimi secondi può essere ancora in scrittura.
-            if (!firstScan && now - file.lastModified < SETTLE_MS) {
+            if (RecordingStore.isKnown(file.docId)) continue
+            // Un file modificato negli ultimi secondi può essere ancora in scrittura (una data futura no).
+            if (!firstScan && now - file.lastModified in 0 until SETTLE_MS) {
                 stillWriting = true
                 continue
             }
@@ -92,13 +99,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                 settings.mode == SendMode.AUTOMATICO -> RecStatus.IN_CODA
                 else -> RecStatus.DA_CONFERMARE
             }
-            val message = when {
-                firstScan -> null
-                reason == Exclusions.Reason.COLLEGA ->
-                    "Contatto avvocato: non inviata (art. 38, comma 2, CDF: le telefonate con i colleghi non si registrano)."
-                reason == Exclusions.Reason.ELENCO -> "Nell'elenco «Non inviare mai»."
-                else -> null
-            }
+            val message = if (firstScan || reason == null) null else Exclusions.message(reason)
             val entry = RecEntry(file.docId, file.uri.toString(), file.name, file.size, file.lastModified, status, message = message)
             RecordingStore.put(entry)
             when (status) {
@@ -109,7 +110,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         }
         if (firstScan) settings.baselineDone = true
         if (stillWriting) Jobs.syncNow(context, 30)
-        // Riprende il controllo delle registrazioni già inviate (per esempio dopo un riavvio).
+        // Riprende gli invii in coda e il controllo delle registrazioni già inviate (per esempio dopo un riavvio).
+        RecordingStore.all().filter { it.status == RecStatus.IN_CODA }.forEach { Jobs.upload(context, it.docId) }
         RecordingStore.all().filter { it.status == RecStatus.INVIATA }.forEach { Jobs.watchStatus(context, it.docId, 0) }
         Result.success()
     }
@@ -126,20 +128,41 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         RecordingStore.init(context)
         val docId = inputData.getString(Jobs.KEY_DOC) ?: return@withContext Result.failure()
         val entry = RecordingStore.get(docId) ?: return@withContext Result.failure()
-        if (entry.status == RecStatus.INVIATA || entry.status == RecStatus.PRONTA) return@withContext Result.success()
+        // Solo le registrazioni in coda: una annullata («Non inviare») o già inviata non parte.
+        if (entry.status != RecStatus.IN_CODA && entry.status != RecStatus.IN_INVIO) return@withContext Result.success()
         val settings = AppSettings(context)
+        // Le esclusioni valgono anche per le registrazioni già in coda (regole aggiunte dopo),
+        // salvo conferma esplicita dell'avvocato con «Invia comunque».
+        if (!entry.forced) {
+            val reason = Exclusions.reason(entry.info, settings.excludeLawyers, Exclusions.parseRules(settings.exclusionRules))
+            if (reason != null) {
+                RecordingStore.update(docId) { it.copy(status = RecStatus.ESCLUSA, message = Exclusions.message(reason)) }
+                return@withContext Result.success()
+            }
+        }
         val baseUrl = settings.baseUrl
             ?: return@withContext fail(entry, "Indirizzo di Seguito mancante o non valido: correggerlo nelle impostazioni.")
         RecordingStore.update(docId) { it.copy(status = RecStatus.IN_INVIO, message = null) }
         val client = SeguitoClient(baseUrl, settings.password)
+        val uri = Uri.parse(entry.uri)
         val response = try {
-            context.contentResolver.openInputStream(Uri.parse(entry.uri))?.use { input ->
-                client.upload(input, entry.size, entry.name, entry.lastModified, CallFile.mimeType(entry.name))
-            } ?: return@withContext fail(entry, "Il file non è più disponibile sul telefono.")
+            val durationMs = durationOf(uri)
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                client.upload(input, entry.size, entry.name, entry.lastModified, durationMs, CallFile.mimeType(entry.name))
+            } ?: return@withContext fail(entry, MISSING_FILE)
         } catch (e: SecurityException) {
             return@withContext fail(entry, "Permesso sulla cartella delle registrazioni revocato: sceglierla di nuovo nell'app.")
+        } catch (e: FileNotFoundException) {
+            return@withContext fail(entry, MISSING_FILE)
+        } catch (e: InsecureHostException) {
+            return@withContext fail(entry, e.message ?: "Indirizzo di Seguito non sicuro.")
         } catch (e: IOException) {
-            return@withContext retryOrFail(entry, "Seguito non raggiungibile: nuovo tentativo appena c'è rete.")
+            // Senza rete (per esempio fuori studio senza Tailscale) si riprova senza limite:
+            // WorkManager allunga le attese fino a 5 ore e riparte quando torna la connessione.
+            RecordingStore.update(entry.docId) {
+                it.copy(status = RecStatus.IN_CODA, message = "Seguito non raggiungibile: nuovo tentativo appena c'è rete.")
+            }
+            return@withContext Result.retry()
         }
         when {
             response.ok -> {
@@ -170,6 +193,14 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         }
     }
 
+    /** Durata dell'audio, se il file la indica: serve al server quando il nome non contiene l'ora. */
+    private fun durationOf(uri: Uri): Long? = runCatching {
+        MediaMetadataRetriever().use { retriever ->
+            retriever.setDataSource(applicationContext, uri)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+        }
+    }.getOrNull()
+
     private fun retryOrFail(entry: RecEntry, message: String): Result {
         if (runAttemptCount >= MAX_ATTEMPTS) return fail(entry, message)
         RecordingStore.update(entry.docId) { it.copy(status = RecStatus.IN_CODA, message = message) }
@@ -184,6 +215,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
 
     private companion object {
         const val MAX_ATTEMPTS = 8
+        const val MISSING_FILE = "Il file non è più disponibile sul telefono."
     }
 }
 
@@ -226,8 +258,13 @@ class StatusWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 again()
             }
             response.code == 404 -> {
+                // Il server non la conosce più: «Riprova» invierà di nuovo l'audio.
                 RecordingStore.update(docId) {
-                    it.copy(status = RecStatus.ERRORE, message = "Registrazione non trovata su Seguito: inviarla di nuovo.")
+                    it.copy(
+                        status = RecStatus.ERRORE,
+                        serverId = null,
+                        message = "Registrazione non trovata su Seguito: toccare «Riprova» per inviarla di nuovo.",
+                    )
                 }
                 Result.success()
             }

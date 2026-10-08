@@ -147,7 +147,7 @@ private fun MainScreen() {
         }
     }
 
-    fun send(entry: RecEntry) {
+    fun send(entry: RecEntry, forced: Boolean = false) {
         Notifications.cancel(context, entry.docId)
         val serverId = entry.serverId
         if (entry.status == RecStatus.ERRORE && serverId != null) {
@@ -160,6 +160,10 @@ private fun MainScreen() {
                 }
                 if (outcome?.ok == true) {
                     Jobs.watchStatus(context, entry.docId)
+                } else if (outcome?.code == 404) {
+                    // Il server non la conosce più: si invia di nuovo l'audio.
+                    RecordingStore.update(entry.docId) { it.copy(status = RecStatus.IN_CODA, serverId = null, message = null) }
+                    Jobs.upload(context, entry.docId)
                 } else {
                     RecordingStore.update(entry.docId) {
                         it.copy(status = RecStatus.ERRORE, message = outcome?.error ?: "Seguito non raggiungibile: riprovare più tardi.")
@@ -168,8 +172,15 @@ private fun MainScreen() {
             }
             return
         }
-        RecordingStore.update(entry.docId) { it.copy(status = RecStatus.IN_CODA, message = null, serverId = null) }
+        RecordingStore.update(entry.docId) {
+            it.copy(status = RecStatus.IN_CODA, message = null, serverId = null, forced = forced || it.forced)
+        }
         Jobs.upload(context, entry.docId)
+    }
+
+    fun cancel(entry: RecEntry) {
+        Jobs.cancelUpload(context, entry.docId)
+        RecordingStore.update(entry.docId) { it.copy(status = RecStatus.NON_INVIATA, message = "Invio annullato.") }
     }
 
     LazyColumn(
@@ -230,8 +241,9 @@ private fun MainScreen() {
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
-                    "Scegli «Recordings» (o «Recordings/Call») nella memoria interna. L'app legge solo quella cartella e " +
-                        "non modifica né cancella le registrazioni. Quelle già presenti non vengono inviate.",
+                    "Scegli «Recordings» (o «Recordings/Call») nella memoria interna. L'app legge solo le chiamate " +
+                        "(cartella «Call», mai le note vocali) e non modifica né cancella le registrazioni. " +
+                        "Quelle già presenti non vengono inviate.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -241,10 +253,19 @@ private fun MainScreen() {
 
         item {
             Section("3. Invio") {
-                ChoiceRow("Chiedi conferma per ogni chiamata (consigliato)", mode == SendMode.CONFERMA) { mode = SendMode.CONFERMA }
-                ChoiceRow("Invia in automatico", mode == SendMode.AUTOMATICO) { mode = SendMode.AUTOMATICO }
+                ChoiceRow("Chiedi conferma per ogni chiamata (consigliato)", mode == SendMode.CONFERMA) {
+                    mode = SendMode.CONFERMA
+                    sendingSaved = false
+                }
+                ChoiceRow("Invia in automatico", mode == SendMode.AUTOMATICO) {
+                    mode = SendMode.AUTOMATICO
+                    sendingSaved = false
+                }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Switch(checked = excludeLawyers, onCheckedChange = { excludeLawyers = it })
+                    Switch(checked = excludeLawyers, onCheckedChange = {
+                        excludeLawyers = it
+                        sendingSaved = false
+                    })
                     Text(
                         "Non inviare le chiamate con contatti «Avv.», «Avvocato» o «Studio legale» (art. 38, comma 2, CDF)",
                         style = MaterialTheme.typography.bodyMedium,
@@ -253,8 +274,17 @@ private fun MainScreen() {
                 }
                 OutlinedTextField(
                     value = rules,
-                    onValueChange = { rules = it },
+                    onValueChange = {
+                        rules = it
+                        sendingSaved = false
+                    },
                     label = { Text("Non inviare mai: nomi o numeri, uno per riga") },
+                    supportingText = {
+                        Text(
+                            "Per chi è in rubrica scrivi il nome come è salvato: nel file della registrazione il Samsung " +
+                                "mette solo il nome, non il numero.",
+                        )
+                    },
                     minLines = 3,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -317,6 +347,7 @@ private fun MainScreen() {
             EntryCard(
                 entry = entry,
                 onSend = { if (entry.status == RecStatus.ESCLUSA) confirmExcluded = entry else send(entry) },
+                onCancel = { cancel(entry) },
                 onSkip = {
                     Notifications.cancel(context, entry.docId)
                     RecordingStore.update(entry.docId) { it.copy(status = RecStatus.NON_INVIATA, message = null) }
@@ -343,7 +374,7 @@ private fun MainScreen() {
             confirmButton = {
                 TextButton(onClick = {
                     confirmExcluded = null
-                    send(entry)
+                    send(entry, forced = true)
                 }) { Text("Invia comunque") }
             },
             dismissButton = { TextButton(onClick = { confirmExcluded = null }) { Text("Annulla") } },
@@ -370,7 +401,7 @@ private fun ChoiceRow(label: String, selected: Boolean, onSelect: () -> Unit) {
 }
 
 @Composable
-private fun EntryCard(entry: RecEntry, onSend: () -> Unit, onSkip: () -> Unit, onOpen: () -> Unit) {
+private fun EntryCard(entry: RecEntry, onSend: () -> Unit, onCancel: () -> Unit, onSkip: () -> Unit, onOpen: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(entry.info.label, style = MaterialTheme.typography.titleMedium)
@@ -400,7 +431,8 @@ private fun EntryCard(entry: RecEntry, onSend: () -> Unit, onSkip: () -> Unit, o
                     RecStatus.ESCLUSA -> OutlinedButton(onClick = onSend) { Text("Invia comunque") }
                     RecStatus.ERRORE -> Button(onClick = onSend) { Text("Riprova") }
                     RecStatus.PRONTA -> Button(onClick = onOpen) { Text("Apri la proposta") }
-                    RecStatus.IN_CODA, RecStatus.IN_INVIO, RecStatus.INVIATA -> Unit
+                    RecStatus.IN_CODA -> OutlinedButton(onClick = onCancel) { Text("Annulla l'invio") }
+                    RecStatus.IN_INVIO, RecStatus.INVIATA -> Unit
                 }
             }
         }
@@ -442,6 +474,8 @@ private fun testConnection(baseUrl: String, password: String): String = try {
             }
         }
     }
+} catch (e: InsecureHostException) {
+    e.message ?: "Indirizzo di Seguito non sicuro."
 } catch (e: IOException) {
     "Seguito non raggiungibile: verificare l'indirizzo e la rete (Wi-Fi dello studio o Tailscale)."
 }

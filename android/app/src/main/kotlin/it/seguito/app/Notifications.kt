@@ -41,7 +41,8 @@ object Notifications {
         val builder = base(context, CHANNEL_NEW)
             .setContentTitle("Chiamata registrata: ${entry.info.label}")
             .setContentText("Inviarla a Seguito per la trascrizione e la proposta di azioni?")
-            .addAction(0, "Invia a Seguito", send)
+            // Con il telefono bloccato l'invio chiede prima lo sblocco.
+            .addAction(NotificationCompat.Action.Builder(0, "Invia a Seguito", send).setAuthenticationRequired(true).build())
             .addAction(0, "Non inviare", skip)
             .setContentIntent(openApp(context))
         notify(context, idFor(entry.docId), builder)

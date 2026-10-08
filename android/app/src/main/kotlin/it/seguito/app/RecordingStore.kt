@@ -30,6 +30,8 @@ data class RecEntry(
     val serverId: String? = null,
     val proposalId: String? = null,
     val message: String? = null,
+    /** Invio confermato dall'avvocato nonostante l'esclusione («Invia comunque»). */
+    val forced: Boolean = false,
 ) {
     val info: CallFileInfo get() = CallFile.parse(name)
 }
@@ -37,27 +39,46 @@ data class RecEntry(
 /**
  * Elenco delle registrazioni viste dall'app, in un file privato dell'app.
  * Interfaccia e lavori in background condividono la stessa istanza (stesso processo).
+ *
+ * L'elenco mostra le registrazioni più recenti; a parte resta l'insieme di
+ * tutte quelle già viste, così una registrazione uscita dall'elenco non torna
+ * a essere «nuova» (nessuna richiesta di invio per le chiamate vecchie).
  */
 object RecordingStore {
     private const val MAX_ENTRIES = 500
+    private const val MAX_SEEN = 50_000
+    private val ACTIVE = setOf(RecStatus.DA_CONFERMARE, RecStatus.IN_CODA, RecStatus.IN_INVIO, RecStatus.INVIATA)
     private val lock = Any()
     private var file: File? = null
+    private var seenFile: File? = null
+    private val seen = LinkedHashSet<String>()
     private val state = MutableStateFlow<List<RecEntry>>(emptyList())
     val entries: StateFlow<List<RecEntry>> = state
 
     fun init(context: Context) = synchronized(lock) {
         if (file == null) {
-            val f = File(context.applicationContext.filesDir, "registrazioni.json")
+            val dir = context.applicationContext.filesDir
+            val f = File(dir, "registrazioni.json")
             file = f
+            seenFile = File(dir, "registrazioni-viste.txt")
             state.value = load(f)
+            seen += loadSeen()
+            seen += state.value.map { it.docId }
         }
     }
 
     fun get(docId: String): RecEntry? = state.value.firstOrNull { it.docId == docId }
 
+    /** true se la registrazione è già stata vista, anche se non è più nell'elenco. */
+    fun isKnown(docId: String): Boolean = synchronized(lock) { docId in seen }
+
     fun all(): List<RecEntry> = state.value
 
     fun put(entry: RecEntry) = synchronized(lock) {
+        if (seen.add(entry.docId)) {
+            while (seen.size > MAX_SEEN) seen.remove(seen.first())
+            saveSeen()
+        }
         save(listOf(entry) + state.value.filter { it.docId != entry.docId })
     }
 
@@ -69,15 +90,31 @@ object RecordingStore {
     }
 
     private fun save(list: List<RecEntry>) {
-        val sorted = list.sortedByDescending { it.lastModified }.take(MAX_ENTRIES)
+        // Le registrazioni ancora in lavorazione restano nell'elenco anche oltre il limite.
+        val sorted = list.sortedByDescending { it.lastModified }
+            .filterIndexed { index, entry -> index < MAX_ENTRIES || entry.status in ACTIVE }
         state.value = sorted
         val f = file ?: return
         val array = JSONArray()
         sorted.forEach { array.put(toJson(it)) }
+        writeAtomic(f, array.toString())
+    }
+
+    private fun saveSeen() {
+        val f = seenFile ?: return
+        writeAtomic(f, seen.joinToString("\n"))
+    }
+
+    private fun loadSeen(): List<String> = runCatching {
+        val f = seenFile
+        if (f == null || !f.exists()) emptyList() else f.readLines().filter { it.isNotBlank() }
+    }.getOrDefault(emptyList())
+
+    private fun writeAtomic(f: File, text: String) {
         val tmp = File(f.parentFile, "${f.name}.tmp")
-        tmp.writeText(array.toString())
+        tmp.writeText(text)
         if (!tmp.renameTo(f)) {
-            f.writeText(array.toString())
+            f.writeText(text)
             tmp.delete()
         }
     }
@@ -98,6 +135,7 @@ object RecordingStore {
         .put("serverId", e.serverId ?: JSONObject.NULL)
         .put("proposalId", e.proposalId ?: JSONObject.NULL)
         .put("message", e.message ?: JSONObject.NULL)
+        .put("forced", e.forced)
 
     private fun fromJson(o: JSONObject): RecEntry? = runCatching {
         RecEntry(
@@ -110,6 +148,7 @@ object RecordingStore {
             serverId = o.optStringOrNull("serverId"),
             proposalId = o.optStringOrNull("proposalId"),
             message = o.optStringOrNull("message"),
+            forced = o.optBoolean("forced", false),
         )
     }.getOrNull()
 
