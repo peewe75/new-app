@@ -49,6 +49,12 @@ App per lo studio dell'Avv. Vincenzo Sapone (Cantù). Dopo una telefonata o una 
    - **Strada B**: Netlify Free solo per la PWA + tutta l'elaborazione nelle Edge Functions di Supabase a Francoforte, circa 25 $/mese. Va riscritta parte del codice per Deno e l'analisi deve stare entro 400 secondi.
    - In entrambe: DPA da firmare con Supabase (dalla dashboard) e con Netlify; accesso con email, password e codice TOTP (Supabase Auth); token Microsoft e Plaud cifrati in Supabase Vault.
 
+3. Trascrizione senza costi (domanda dell'avvocato, 8 ottobre 2026): trascrivere sul computer dello studio invece che con Speechmatics? Dati verificati l'8 ottobre 2026:
+   - Speechmatics non ha più ore gratuite ogni mese (dal 1° agosto 2026). Chi si registra riceve una volta sola 100 $ di credito, circa 250 ore con il modello *enhanced*, senza carta di credito: finito il credito il servizio si ferma, senza addebiti.
+   - **In locale (consigliato da valutare)**: libreria sherpa-onnx per Node (licenza Apache-2.0, pronta per Windows e macOS, senza Python). Riconoscimento della voce con Parakeet v3 (italiano incluso) o Whisper e separazione dei parlanti con pyannote 3.0. Costo zero e l'audio non esce dallo studio. Circa 15-25 minuti per ogni ora di audio su un PC da ufficio a 4 core, circa 1 GB di modelli. La separazione dei parlanti è meno precisa di Speechmatics nelle riunioni con molte persone: il numero dei partecipanti va indicato dall'app. L'italiano va provato su registrazioni vere.
+   - Galaxy AI sul telefono: gratuita, ma serve condividere a mano il testo di ogni registrazione, e nelle riunioni la separazione dei parlanti è debole. Non adatta come strada principale.
+   - Serve sapere che computer è (Windows o Mac, processore, memoria).
+
 ## Prossimi passi
 
 1. Completare e verificare la prima versione (vedi `docs/specifica-tecnica.md`).
