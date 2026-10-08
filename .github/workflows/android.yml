@@ -14,8 +14,12 @@ jobs:
   ambiente:
     runs-on: ubuntu-latest
     steps:
-      - name: SDK Android disponibile
+      - name: Versioni stabili delle librerie Android
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools" || true
-          java -version
+          for a in com/android/tools/build/gradle androidx/compose/compose-bom androidx/activity/activity-compose \
+                   androidx/work/work-runtime-ktx androidx/core/core-ktx androidx/documentfile/documentfile \
+                   androidx/lifecycle/lifecycle-runtime-compose androidx/browser/browser; do
+            v=$(curl -s "https://dl.google.com/dl/android/maven2/$a/maven-metadata.xml" \
+              | grep -oE "<version>[0-9.]+</version>" | sed -E 's#</?version>##g' | tail -3 | tr '\n' ' ')
+            echo "$a: $v"
+          done
