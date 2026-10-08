@@ -86,7 +86,6 @@ object Scanner {
     fun onlyCalls(treeUri: Uri): Boolean = runCatching {
         CallFile.isCallFolder(DocumentsContract.getTreeDocumentId(treeUri).substringAfter(':').substringAfterLast('/'))
     }.getOrDefault(false)
-    }
 
     /** Percorso leggibile della cartella scelta, es. "Recordings/Call". */
     fun describe(treeUri: Uri): String =
