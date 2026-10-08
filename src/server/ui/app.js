@@ -38,7 +38,7 @@ const CONVERSATION_LABELS = {
   non_determinabile: "Tipo di conversazione non determinato",
 };
 
-const SOURCE_LABELS = { plaud: "Plaud Note Pro", file: "File importato" };
+const SOURCE_LABELS = { plaud: "Plaud Note Pro", file: "File importato", telefono: "Telefono" };
 
 const ROLE_LABELS = {
   avvocato_studio: "Avvocato dello studio",

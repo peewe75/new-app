@@ -14,7 +14,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { isIP } from "node:net";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Readable } from "node:stream";
 import { ApprovalRequestSchema, type ApprovalRequest, type Proposal, type StudioProfile } from "../domain/types.js";
+import type { PhoneUpload, ReceiveMeta } from "../phone/phone-inbox.js";
 import type { Store } from "../store/store.js";
 
 export interface AppServices {
@@ -35,7 +37,21 @@ export interface AppServices {
   sync?: () => Promise<{ processed: number; skipped: number; errors: string[] }>;
   /** Collegamento a Microsoft 365 (calendario e bozze); assente se non configurato. */
   microsoft365?: Microsoft365Services;
+  /** Ricezione delle chiamate registrate con lo smartphone; assente se non configurata. */
+  phone?: PhoneServices;
 }
+
+export interface PhoneServices {
+  /** Dimensione massima di una registrazione, in byte. */
+  readonly maxBytes: number;
+  receive(body: Readable, meta: ReceiveMeta): Promise<{ upload: PhoneUpload; created: boolean }>;
+  get(id: string): Promise<PhoneUpload | null>;
+  list(): Promise<PhoneUpload[]>;
+  retry(id: string): Promise<PhoneUpload>;
+}
+
+/** Tipi di contenuto accettati per l'audio inviato dal telefono. */
+const AUDIO_TYPE = /^(audio\/[a-z0-9.+-]+|application\/octet-stream)$/;
 
 export interface Microsoft365Services {
   /** Origine dell'indirizzo di ritorno registrato: il collegamento si avvia solo da lì. */
@@ -107,6 +123,13 @@ const MESSAGES = {
   fileNotFound: "File non trovato.",
   badFilePath: "Percorso del file non valido.",
   syncUnavailable: "La sincronizzazione delle registrazioni non è configurata.",
+  phoneUnavailable:
+    "La ricezione delle registrazioni dal telefono non è configurata: servono la chiave di Claude e il servizio di trascrizione (vedi docs/telefono-samsung.md).",
+  phoneNeedsPassword:
+    "Per ricevere le registrazioni dal telefono impostare SEGUITO_PASSWORD: l'invio dell'audio richiede sempre la password.",
+  phoneNotAudio: "Il corpo della richiesta deve essere un file audio (Content-Type audio/... o application/octet-stream).",
+  phoneNoName: "Indicare il nome del file nel parametro «nome».",
+  phoneNotFound: "Registrazione non trovata.",
   microsoftUnavailable:
     "Microsoft 365 non è configurato: impostare SEGUITO_M365_TENANT_ID, SEGUITO_M365_CLIENT_ID e SEGUITO_M365_CLIENT_SECRET.",
   methodNotAllowed: "Metodo non consentito per questo indirizzo.",
@@ -136,6 +159,8 @@ class HttpError extends Error {
 
 interface Route {
   method: "GET" | "POST";
+  /** POST con un file nel corpo (audio dal telefono) invece di JSON. */
+  upload?: boolean;
   run(req: IncomingMessage, res: ServerResponse): Promise<void>;
 }
 
@@ -177,7 +202,10 @@ async function handleRequest(ctx: AppContext, req: IncomingMessage, res: ServerR
     if (method !== route.method) {
       throw new HttpError(405, MESSAGES.methodNotAllowed, { Allow: route.method === "GET" ? "GET, HEAD" : "POST" });
     }
-    if (route.method === "POST") assertSameOriginJson(req);
+    if (route.method === "POST") {
+      if (route.upload === true) assertUploadRequest(req);
+      else assertSameOriginJson(req);
+    }
     await route.run(req, res);
   } catch (err) {
     sendFailure(res, err);
@@ -227,6 +255,7 @@ function findRoute(ctx: AppContext, segments: readonly string[]): Route | null {
   if (count === 3 && second === "microsoft365" && third === "disconnect") {
     return post((_req, res) => disconnectMicrosoft(ctx, res));
   }
+  if (second === "telefono" && third === "registrazioni") return phoneRoute(ctx, segments.slice(3));
   if (second !== "proposals") return null;
   if (count === 2) return get((_req, res) => listProposals(ctx, res));
   if (third === undefined || third === "") return null;
@@ -247,6 +276,7 @@ async function publicConfig(ctx: AppContext): Promise<Record<string, unknown>> {
     lawyerName: studio.lawyerName,
     timezone: studio.timezone,
     syncAvailable: ctx.sync !== null,
+    phoneAvailable: ctx.services.phone !== undefined,
     // null: Microsoft 365 non configurato; altrimenti stato del collegamento.
     microsoft365:
       microsoft365 === undefined
@@ -288,6 +318,82 @@ async function finishMicrosoftLogin(ctx: AppContext, req: IncomingMessage, res: 
   }
   res.writeHead(302, { Location: `/?microsoft365=${outcome}` });
   res.end();
+}
+
+// ---------------------------------------------------------------------------
+// Registrazioni dal telefono
+// ---------------------------------------------------------------------------
+
+function phoneRoute(ctx: AppContext, rest: readonly string[]): Route | null {
+  const [id, action] = rest;
+  if (rest.length === 0) {
+    return { method: "POST", upload: true, run: (req, res) => receivePhoneRecording(ctx, req, res) };
+  }
+  if (rest.length === 1 && id === "elenco") return get(async (_req, res) => listPhoneRecordings(ctx, res));
+  if (rest.length === 1 && id) return get(async (_req, res) => phoneRecordingStatus(ctx, res, id));
+  if (rest.length === 2 && id && action === "riprova") return post(async (_req, res) => retryPhoneRecording(ctx, res, id));
+  return null;
+}
+
+function requirePhone(ctx: AppContext): PhoneServices {
+  const phone = ctx.services.phone;
+  if (phone === undefined) throw new HttpError(503, MESSAGES.phoneUnavailable);
+  return phone;
+}
+
+/** Dati della registrazione per il telefono: niente trascrizione né dati del cliente oltre al titolo. */
+function phoneView(upload: PhoneUpload): Record<string, unknown> {
+  return {
+    id: upload.id,
+    title: upload.title,
+    status: upload.status,
+    message: upload.message,
+    proposalId: upload.proposalId,
+    receivedAt: upload.receivedAt,
+    startedAt: upload.startedAt,
+    nextAttemptAt: upload.nextAttemptAt,
+  };
+}
+
+async function receivePhoneRecording(ctx: AppContext, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  // La password, verificata da handleRequest su ogni richiesta, qui è obbligatoria.
+  if (ctx.services.password === null) throw new HttpError(403, MESSAGES.phoneNeedsPassword);
+  const phone = requirePhone(ctx);
+  const declared = Number(req.headers["content-length"]);
+  if (Number.isFinite(declared) && declared > phone.maxBytes) {
+    throw new HttpError(413, `La registrazione supera il limite di ${Math.floor(phone.maxBytes / (1024 * 1024))} MB.`);
+  }
+  const query = new URL(req.url ?? "/", "http://seguito.invalid").searchParams;
+  const fileName = query.get("nome")?.trim() ?? "";
+  if (fileName === "") throw new HttpError(400, MESSAGES.phoneNoName);
+  const contentType = (req.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
+  const { upload, created } = await phone.receive(req, {
+    fileName,
+    contentType,
+    lastModifiedMs: positiveNumber(query.get("modificato")),
+    durationMs: positiveNumber(query.get("durata")),
+  });
+  sendJson(res, created ? 201 : 200, phoneView(upload));
+}
+
+async function phoneRecordingStatus(ctx: AppContext, res: ServerResponse, id: string): Promise<void> {
+  const upload = await requirePhone(ctx).get(id);
+  if (upload === null) throw new HttpError(404, MESSAGES.phoneNotFound);
+  sendJson(res, 200, phoneView(upload));
+}
+
+async function listPhoneRecordings(ctx: AppContext, res: ServerResponse): Promise<void> {
+  sendJson(res, 200, (await requirePhone(ctx).list()).map(phoneView));
+}
+
+async function retryPhoneRecording(ctx: AppContext, res: ServerResponse, id: string): Promise<void> {
+  sendJson(res, 200, phoneView(await requirePhone(ctx).retry(id)));
+}
+
+function positiveNumber(value: string | null): number | null {
+  if (value === null || value.trim() === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 async function disconnectMicrosoft(ctx: AppContext, res: ServerResponse): Promise<void> {
@@ -435,10 +541,26 @@ function equalSecrets(given: string, expected: string): boolean {
   return timingSafeEqual(digest(given), digest(expected));
 }
 
+/**
+ * Invio dell'audio dal telefono: solo con la password di Seguito impostata (il
+ * telefono la invia a ogni richiesta), solo file audio e mai da un'altra origine
+ * (i browser non possono inviare questo tipo di contenuto a un altro sito senza
+ * un permesso CORS, che Seguito non concede).
+ */
+function assertUploadRequest(req: IncomingMessage): void {
+  const mediaType = (req.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
+  if (!AUDIO_TYPE.test(mediaType)) throw new HttpError(415, MESSAGES.phoneNotAudio);
+  assertSameOriginIfPresent(req);
+}
+
 /** POST accettati solo come JSON e, se il browser indica l'origine, dalla stessa origine. */
 function assertSameOriginJson(req: IncomingMessage): void {
   const mediaType = (req.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase();
   if (mediaType !== "application/json") throw new HttpError(415, MESSAGES.notJson);
+  assertSameOriginIfPresent(req);
+}
+
+function assertSameOriginIfPresent(req: IncomingMessage): void {
   const origin = req.headers.origin;
   if (origin === undefined) return;
   let originHost: string | null;
@@ -581,6 +703,9 @@ function describeFailure(err: unknown): { status: number; message: string; heade
   }
   if (err instanceof Error && err.name === "ApprovalValidationError") {
     return { status: 400, message: err.message || MESSAGES.invalidApproval, headers: {} };
+  }
+  if (err instanceof Error && err.name === "PhoneUploadError" && "status" in err && typeof err.status === "number") {
+    return { status: err.status, message: err.message, headers: {} };
   }
   return { status: 500, message: MESSAGES.internal, headers: {} };
 }

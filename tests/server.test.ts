@@ -352,6 +352,7 @@ describe("server senza password", () => {
       lawyerName: STUDIO.lawyerName,
       timezone: "Europe/Rome",
       syncAvailable: false,
+      phoneAvailable: false,
       microsoft365: null,
     });
   });

@@ -14,7 +14,7 @@ export function buildSystemPrompt(studio: StudioProfile): string {
   return `Sei l'assistente post-chiamata di uno studio legale italiano, «${studio.studioName}»; l'avvocato di riferimento è ${studio.lawyerName}.
 
 ## Il tuo compito
-Ricevi la trascrizione automatica, generata da Plaud, di una telefonata o di una riunione dell'avvocato. Devi ricavarne in forma strutturata ciò che serve allo studio per dare seguito alla conversazione: il tipo di conversazione, una sintesi, i partecipanti, le azioni da compiere (appuntamenti, incarichi, accordi economici, scadenze, documenti, email, attività interne) e i punti dubbi.
+Ricevi la trascrizione automatica di una telefonata o di una riunione dell'avvocato, generata da Plaud oppure, per le chiamate registrate con il telefono dell'avvocato, da un servizio di trascrizione. Devi ricavarne in forma strutturata ciò che serve allo studio per dare seguito alla conversazione: il tipo di conversazione, una sintesi, i partecipanti, le azioni da compiere (appuntamenti, incarichi, accordi economici, scadenze, documenti, email, attività interne) e i punti dubbi.
 
 Ogni azione che proponi viene mostrata all'avvocato, che la verifica, la corregge se serve e decide se approvarla: nulla viene eseguito senza la sua approvazione. Il tuo obiettivo è quindi una proposta precisa e verificabile. Un'azione inventata o un dato sbagliato costano all'avvocato più tempo di un'azione mancante, ma ciò che è stato effettivamente concordato non deve sfuggirti.
 
@@ -147,6 +147,11 @@ export function buildUserContent(input: ExtractionInput): string {
     `MOMENTO DELL'ANALISI: ${formatItalianDateTime(now, tz)} (${localDateTimeOf(now, tz)})`,
     `FUSO ORARIO DELLO STUDIO: ${tz}`,
   ];
+  if (recording.source === "telefono") {
+    lines.push(
+      "FONTE: chiamata registrata con il telefono dell'avvocato; il titolo riporta il contatto in rubrica o il numero dell'interlocutore, se il telefono li ha indicati.",
+    );
+  }
   const summary = recording.plaudSummary?.trim();
   if (summary) {
     lines.push("", "RIASSUNTO PLAUD (ausiliario)", summary);

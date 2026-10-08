@@ -26,7 +26,8 @@ export const SegmentSchema = z.object({
 });
 export type Segment = z.infer<typeof SegmentSchema>;
 
-export const RecordingSourceNameSchema = z.enum(["plaud", "file"]);
+/** plaud: Plaud Note Pro; file: trascrizioni importate; telefono: chiamate registrate con lo smartphone. */
+export const RecordingSourceNameSchema = z.enum(["plaud", "file", "telefono"]);
 export type RecordingSourceName = z.infer<typeof RecordingSourceNameSchema>;
 
 export const RecordingSchema = z.object({
