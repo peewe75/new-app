@@ -22,7 +22,7 @@ import { processRecording, type PipelineDeps } from "../pipeline.js";
 import { recordingId } from "../sources/source.js";
 import { writeFileAtomic, writeFileIfAbsent } from "../store/json-store.js";
 import { TranscriptionError, type Transcriber } from "../transcribe/transcriber.js";
-import { callTitle, parseCallFileName } from "./call-file-name.js";
+import { callTitle, parseCallFileName, voiceTitle } from "./call-file-name.js";
 
 export const PhoneUploadStatusSchema = z.enum([
   /** Ricevuta, in coda per la trascrizione. */
@@ -38,8 +38,14 @@ export const PhoneUploadStatusSchema = z.enum([
 ]);
 export type PhoneUploadStatus = z.infer<typeof PhoneUploadStatusSchema>;
 
+/** chiamata: registrata dall'app Telefono; vocale: registratore vocale (riunioni, appunti). */
+export const PhoneRecordingKindSchema = z.enum(["chiamata", "vocale"]);
+export type PhoneRecordingKind = z.infer<typeof PhoneRecordingKindSchema>;
+
 export const PhoneUploadSchema = z.object({
   id: z.string(),
+  /** Assente nelle registrazioni ricevute prima delle registrazioni vocali: erano tutte chiamate. */
+  kind: PhoneRecordingKindSchema.default("chiamata"),
   fileName: z.string(),
   contentType: z.string(),
   sizeBytes: z.number(),
@@ -64,6 +70,10 @@ export type PhoneUpload = z.infer<typeof PhoneUploadSchema>;
 export interface ReceiveMeta {
   fileName: string;
   contentType: string;
+  /** Predefinito: chiamata. */
+  kind?: PhoneRecordingKind;
+  /** Titolo indicato dall'avvocato sul telefono (registrazioni vocali), se presente. */
+  title?: string | null;
   /** Data di ultima modifica del file sul telefono (ms), di solito la fine della chiamata. */
   lastModifiedMs: number | null;
   /** Durata indicata dal telefono, se nota. */
@@ -348,19 +358,22 @@ export class PhoneInbox {
 
   private newUpload(id: string, meta: ReceiveMeta, sizeBytes: number): PhoneUpload {
     const fileName = safeFileName(meta.fileName);
+    const kind = meta.kind ?? "chiamata";
     const info = parseCallFileName(fileName);
     const now = this.now();
     return {
       id,
+      kind,
       fileName,
       contentType: meta.contentType,
       sizeBytes,
       receivedAt: now.toISOString(),
-      contact: info.contact,
-      phoneNumber: info.phoneNumber,
+      // Nelle registrazioni vocali il nome del file non indica un interlocutore.
+      contact: kind === "chiamata" ? info.contact : null,
+      phoneNumber: kind === "chiamata" ? info.phoneNumber : null,
       startedAt: this.startedAt(info.startedLocal, meta, now),
       durationMs: meta.durationMs,
-      title: callTitle(info),
+      title: kind === "chiamata" ? callTitle(info) : voiceTitle(fileName, meta.title ?? null),
       status: "ricevuta",
       message: null,
       attempts: 0,

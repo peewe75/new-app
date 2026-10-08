@@ -1,6 +1,6 @@
 /**
- * Informazioni ricavabili dal nome dei file delle chiamate registrate dallo
- * smartphone. Samsung (One UI) usa "<prefisso> <contatto o numero>_aaMMgg_hhmmss.m4a",
+ * Informazioni ricavabili dal nome dei file registrati con lo smartphone:
+ * chiamate e registrazioni vocali. Samsung (One UI) usa "<prefisso> <contatto o numero>_aaMMgg_hhmmss.m4a",
  * con un prefisso nella lingua del telefono; altri modelli "<numero>_aaaaMMgghhmmss"
  * oppure "<nome>@<numero>_aaaaMMgghhmmss". Si legge solo la parte finale con data e
  * ora (ora locale del telefono) e il contatto che la precede.
@@ -72,4 +72,25 @@ export function callTitle(info: CallFileInfo): string {
   if (info.contact !== null) return `Telefonata con ${info.contact}`;
   if (info.phoneNumber !== null) return `Telefonata con ${info.phoneNumber}`;
   return "Telefonata registrata con il telefono";
+}
+
+/** Nomi predefiniti dei registratori vocali, che non dicono nulla del contenuto (es. "Voce 001", "Voice 012"). */
+const GENERIC_VOICE_NAME =
+  /^(voce|voice|registrazione( vocale)?|nota vocale|nota|memo( vocale)?|recording|rec|audio|interview|intervista|speech[ -]to[ -]text)?[ _-]*[\d_ -]*$/i;
+
+/** Titolo di una registrazione vocale: quello indicato dall'avvocato, altrimenti il nome del file se dice qualcosa. */
+export function voiceTitle(fileName: string, userTitle: string | null): string {
+  const chosen = cleanTitle(userTitle ?? "");
+  if (chosen !== "") return `Registrazione vocale: ${chosen}`;
+  const base = cleanTitle(fileName.replace(/^.*[\\/]/, "").replace(/\.[A-Za-z0-9]{1,5}$/, "").replace(/_/g, " "));
+  if (base === "" || GENERIC_VOICE_NAME.test(base)) return "Registrazione vocale";
+  return `Registrazione vocale: ${base}`;
+}
+
+function cleanTitle(text: string): string {
+  return text
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
 }

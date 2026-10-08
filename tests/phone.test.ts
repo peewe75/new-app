@@ -11,7 +11,7 @@ import { JsonCaseManagement } from "../src/enrich/json-case-management.js";
 import { ExtractionError } from "../src/extract/claude-extractor.js";
 import type { ExtractionInput, Extractor } from "../src/extract/extractor.js";
 import { buildUserContent } from "../src/extract/prompt.js";
-import { callTitle, parseCallFileName } from "../src/phone/call-file-name.js";
+import { callTitle, parseCallFileName, voiceTitle } from "../src/phone/call-file-name.js";
 import { PhoneInbox, type PhoneUpload } from "../src/phone/phone-inbox.js";
 import type { PipelineDeps } from "../src/pipeline.js";
 import { createAppServer, type AppServices } from "../src/server/app.js";
@@ -76,6 +76,17 @@ describe("parseCallFileName", () => {
       "Telefonata con +393331234567",
     );
     expect(callTitle({ contact: null, phoneNumber: null, startedLocal: null })).toBe("Telefonata registrata con il telefono");
+  });
+
+  it("titola le registrazioni vocali con il titolo scelto o con il nome del file, se dice qualcosa", () => {
+    expect(voiceTitle("Voce 001.m4a", "  Riunione con il cliente Rossi ")).toBe(
+      "Registrazione vocale: Riunione con il cliente Rossi",
+    );
+    expect(voiceTitle("Riunione team lunedì.m4a", null)).toBe("Registrazione vocale: Riunione team lunedì");
+    for (const generic of ["Voce 001.m4a", "Voice 012.m4a", "Registrazione 3.m4a", "20261008_101530.m4a", "Interview 002.m4a"]) {
+      expect(voiceTitle(generic, null), generic).toBe("Registrazione vocale");
+    }
+    expect(voiceTitle("x.m4a", "a\u0000b".padEnd(300, "c"))).toHaveLength("Registrazione vocale: ".length + 120);
   });
 });
 
@@ -247,6 +258,38 @@ describe("PhoneInbox", () => {
     const content = buildUserContent(env.extractor.inputs[0] as ExtractionInput);
     expect(content).toContain("TITOLO: Telefonata con Mario Rossi");
     expect(content).toContain("FONTE: chiamata registrata con il telefono dell'avvocato");
+  });
+
+  it("registrazione vocale: titolo scelto, nessun interlocutore e fonte descritta a Claude", async () => {
+    const { upload } = await env.inbox.receive(audio("riunione"), {
+      fileName: "Voce 003.m4a",
+      contentType: "audio/mp4",
+      kind: "vocale",
+      title: "Riunione con il cliente Rossi",
+      lastModifiedMs: Date.parse("2026-10-08T09:00:00Z"),
+      durationMs: 45 * 60_000,
+    });
+    expect(upload).toMatchObject({
+      kind: "vocale",
+      title: "Registrazione vocale: Riunione con il cliente Rossi",
+      contact: null,
+      phoneNumber: null,
+      startedAt: "2026-10-08T08:15:00.000Z",
+    });
+    await waitFor(upload.id, ["pronta"]);
+    const content = buildUserContent(env.extractor.inputs[0] as ExtractionInput);
+    expect(content).toContain("TITOLO: Registrazione vocale: Riunione con il cliente Rossi");
+    expect(content).toContain("FONTE: registrazione vocale fatta con il registratore del telefono");
+    expect(content).not.toContain("chiamata registrata");
+  });
+
+  it("le registrazioni salvate prima delle registrazioni vocali restano chiamate", async () => {
+    const { upload } = await env.inbox.receive(audio("vecchia"), META);
+    await waitFor(upload.id, ["pronta"]);
+    const path = join(env.inboxDir, `${upload.id}.json`);
+    const { kind: _kind, ...old } = upload;
+    await writeFile(path, JSON.stringify(old));
+    expect((await env.inbox.get(upload.id))?.kind).toBe("chiamata");
   });
 
   it("riconosce lo stesso audio inviato due volte", async () => {
@@ -484,7 +527,7 @@ describe("rotte /api/telefono/registrazioni", () => {
       const view = sent.json();
       expect(view).toMatchObject({ title: "Telefonata con Mario Rossi", status: "ricevuta" });
       expect(Object.keys(view).sort()).toEqual(
-        ["id", "message", "nextAttemptAt", "proposalId", "receivedAt", "startedAt", "status", "title"].sort(),
+        ["id", "kind", "message", "nextAttemptAt", "proposalId", "receivedAt", "startedAt", "status", "title"].sort(),
       );
       const again = await send(
         server.port,
@@ -532,9 +575,29 @@ describe("rotte /api/telefono/registrazioni", () => {
       expect(cross.status).toBe(403);
       const noName = await send(server.port, "POST", "/api/telefono/registrazioni", { ...AUTH, "Content-Type": "audio/mp4" }, body);
       expect(noName.status).toBe(400);
+      const badKind = await send(server.port, "POST", `${path}&tipo=video`, { ...AUTH, "Content-Type": "audio/mp4" }, body);
+      expect(badKind.status).toBe(400);
       const tooBig = await send(server.port, "POST", path, { ...AUTH, "Content-Type": "audio/mp4" }, Buffer.alloc(2048));
       expect(tooBig.status).toBe(413);
       expect((await readdir(env.inboxDir).catch(() => [])).filter((n) => n.endsWith(".audio"))).toEqual([]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("riceve una registrazione vocale con il titolo scelto sul telefono", async () => {
+    const server = await start(services());
+    try {
+      const titolo = encodeURIComponent("Riunione di team");
+      const sent = await send(
+        server.port,
+        "POST",
+        `/api/telefono/registrazioni?nome=${encodeURIComponent("Voce 004.m4a")}&tipo=vocale&titolo=${titolo}`,
+        { ...AUTH, "Content-Type": "audio/mp4" },
+        Buffer.from("audio della riunione"),
+      );
+      expect(sent.status).toBe(201);
+      expect(sent.json()).toMatchObject({ kind: "vocale", title: "Registrazione vocale: Riunione di team" });
     } finally {
       await server.close();
     }

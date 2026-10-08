@@ -129,6 +129,7 @@ const MESSAGES = {
     "Per ricevere le registrazioni dal telefono impostare SEGUITO_PASSWORD: l'invio dell'audio richiede sempre la password.",
   phoneNotAudio: "Il corpo della richiesta deve essere un file audio (Content-Type audio/... o application/octet-stream).",
   phoneNoName: "Indicare il nome del file nel parametro «nome».",
+  phoneBadKind: "Tipo di registrazione non valido: «chiamata» oppure «vocale».",
   phoneNotFound: "Registrazione non trovata.",
   microsoftUnavailable:
     "Microsoft 365 non è configurato: impostare SEGUITO_M365_TENANT_ID, SEGUITO_M365_CLIENT_ID e SEGUITO_M365_CLIENT_SECRET.",
@@ -351,6 +352,7 @@ function requirePhone(ctx: AppContext): PhoneServices {
 function phoneView(upload: PhoneUpload): Record<string, unknown> {
   return {
     id: upload.id,
+    kind: upload.kind,
     title: upload.title,
     status: upload.status,
     message: upload.message,
@@ -372,10 +374,14 @@ async function receivePhoneRecording(ctx: AppContext, req: IncomingMessage, res:
   const query = new URL(req.url ?? "/", "http://seguito.invalid").searchParams;
   const fileName = query.get("nome")?.trim() ?? "";
   if (fileName === "") throw new HttpError(400, MESSAGES.phoneNoName);
+  const kind = query.get("tipo")?.trim() || "chiamata";
+  if (kind !== "chiamata" && kind !== "vocale") throw new HttpError(400, MESSAGES.phoneBadKind);
   const contentType = (req.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
   const { upload, created } = await phone.receive(req, {
     fileName,
     contentType,
+    kind,
+    title: query.get("titolo"),
     lastModifiedMs: boundedMs(query.get("modificato"), MAX_DATE_MS),
     durationMs: boundedMs(query.get("durata"), MAX_CALL_MS),
   });
