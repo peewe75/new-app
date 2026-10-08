@@ -87,10 +87,11 @@ export function voiceTitle(fileName: string, userTitle: string | null): string {
   return `Registrazione vocale: ${base}`;
 }
 
+/** Senza caratteri di controllo, al massimo 120 caratteri (mai a metà di un'emoji). */
 function cleanTitle(text: string): string {
-  return text
+  const normalized = text
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 120);
+    .trim();
+  return Array.from(normalized).slice(0, 120).join("").trim();
 }

@@ -87,6 +87,10 @@ describe("parseCallFileName", () => {
       expect(voiceTitle(generic, null), generic).toBe("Registrazione vocale");
     }
     expect(voiceTitle("x.m4a", "a\u0000b".padEnd(300, "c"))).toHaveLength("Registrazione vocale: ".length + 120);
+    // Taglio a 120 caratteri senza spezzare un'emoji (un surrogato isolato farebbe fallire l'analisi).
+    const emoji = voiceTitle("x.m4a", `${"a".repeat(119)}😀b`);
+    expect(emoji.endsWith("a😀")).toBe(true);
+    expect(/[\ud800-\udbff](?![\udc00-\udfff])/.test(emoji)).toBe(false);
   });
 });
 

@@ -85,6 +85,23 @@ object RecordingStore {
 
     fun all(): List<RecEntry> = state.value
 
+    /**
+     * Registrazione rinominata dopo il rilevamento (nuovo docId, stessi dimensione e data,
+     * vecchio file sparito): la voce esistente punta al nuovo file. Il docId resta la chiave
+     * di lavori, notifiche ed elenco; cambiano solo indirizzo e nome.
+     */
+    fun relinkRenamed(file: FoundFile, presentUris: Set<String>): Boolean = synchronized(lock) {
+        if (file.size <= 0 || file.docId in seen) return@synchronized false
+        val old = state.value.firstOrNull {
+            it.kind == file.kind && it.size == file.size && it.lastModified == file.lastModified && it.uri !in presentUris
+        } ?: return@synchronized false
+        seen.add(file.docId)
+        while (seen.size > MAX_SEEN) seen.remove(seen.first())
+        saveSeen()
+        save(state.value.map { if (it.docId == old.docId) it.copy(uri = file.uri.toString(), name = file.name) else it })
+        true
+    }
+
     fun put(entry: RecEntry) = synchronized(lock) {
         val addedId = seen.add(entry.docId)
         val addedFingerprint = entry.size > 0 && seen.add(fingerprint(entry.size, entry.lastModified))

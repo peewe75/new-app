@@ -506,7 +506,7 @@ function serialize(upload: PhoneUpload): string {
 /** Solo il nome del file, senza percorsi né caratteri di controllo. */
 function safeFileName(name: string): string {
   const base = name.replace(/^.*[\\/]/, "").replace(/[\u0000-\u001f\u007f]/g, "").trim();
-  return (base || "registrazione").slice(0, 200);
+  return Array.from(base || "registrazione").slice(0, 200).join("");
 }
 
 /** Messaggio per l'avvocato: quelli dei moduli del progetto sono già in italiano. */

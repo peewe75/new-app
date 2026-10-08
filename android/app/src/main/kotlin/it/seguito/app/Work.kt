@@ -3,6 +3,7 @@ package it.seguito.app
 import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
@@ -69,7 +70,8 @@ object Jobs {
     fun armMediaTrigger(context: Context, afterCurrent: Boolean = false) {
         val constraints = Constraints.Builder()
             .addContentUriTrigger(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, true)
-            .setTriggerContentUpdateDelay(10, TimeUnit.SECONDS)
+            // Oltre i 15 s di assestamento di SyncWorker: il file appena salvato è già accettabile.
+            .setTriggerContentUpdateDelay(20, TimeUnit.SECONDS)
             .setTriggerContentMaxDelay(1, TimeUnit.MINUTES)
             .build()
         val request = OneTimeWorkRequestBuilder<MediaTriggerWorker>().setConstraints(constraints).build()
@@ -107,8 +109,13 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         val rules = Exclusions.parseRules(settings.exclusionRules)
         val now = System.currentTimeMillis()
         var callStillWriting = false
+        val presentUris = files.map { it.uri.toString() }.toSet()
         for (file in files) {
-            if (RecordingStore.isKnown(file.docId, file.size, file.lastModified)) continue
+            if (RecordingStore.isKnown(file.docId, file.size, file.lastModified)) {
+                // Rinominata dopo il rilevamento: la voce esistente punta al nuovo nome.
+                RecordingStore.relinkRenamed(file, presentUris)
+                continue
+            }
             val firstScan = if (file.kind == RecKind.VOCALE) firstVoice else firstCalls
             if (!firstScan) {
                 val age = now - file.lastModified
@@ -217,19 +224,23 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         val uri = Uri.parse(entry.uri)
         val response = try {
             val durationMs = durationOf(uri)
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                client.upload(
-                    input,
-                    SeguitoClient.UploadMeta(
-                        size = entry.size,
-                        fileName = entry.name,
-                        lastModified = entry.lastModified,
-                        durationMs = durationMs,
-                        mimeType = CallFile.mimeType(entry.name),
-                        voice = entry.kind == RecKind.VOCALE,
-                        title = entry.title,
-                    ),
-                )
+            context.contentResolver.openFileDescriptor(uri, "r")?.let { pfd ->
+                // Dimensione letta ora, dallo stesso file che si invia: può essere cambiata dopo il rilevamento.
+                val size = pfd.statSize
+                ParcelFileDescriptor.AutoCloseInputStream(pfd).use { input ->
+                    client.upload(
+                        input,
+                        SeguitoClient.UploadMeta(
+                            size = size,
+                            fileName = entry.name,
+                            lastModified = entry.lastModified,
+                            durationMs = durationMs,
+                            mimeType = CallFile.mimeType(entry.name),
+                            voice = entry.kind == RecKind.VOCALE,
+                            title = entry.title,
+                        ),
+                    )
+                }
             } ?: return@withContext fail(entry, MISSING_FILE)
         } catch (e: SecurityException) {
             return@withContext fail(entry, "Permesso sulla cartella delle registrazioni revocato: sceglierla di nuovo nell'app.")
