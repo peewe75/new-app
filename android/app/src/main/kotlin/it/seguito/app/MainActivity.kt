@@ -48,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -97,6 +98,7 @@ private fun MainScreen() {
     val settings = remember { AppSettings(context) }
     val entries by RecordingStore.entries.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
 
     var serverUrl by remember { mutableStateOf(settings.serverUrl) }
     var password by remember { mutableStateOf(settings.password) }
@@ -127,6 +129,8 @@ private fun MainScreen() {
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { phoneGranted = it }
 
     fun saveConnection() {
+        // Chiude la tastiera, che altrimenti coprirebbe l'esito della verifica.
+        focusManager.clearFocus()
         when (val result = ServerUrl.validate(serverUrl)) {
             is ServerUrl.Result.Invalid -> connection = result.message
             is ServerUrl.Result.Valid -> {
@@ -256,6 +260,7 @@ private fun MainScreen() {
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button(onClick = {
+                        focusManager.clearFocus()
                         settings.mode = mode
                         settings.excludeLawyers = excludeLawyers
                         settings.exclusionRules = rules

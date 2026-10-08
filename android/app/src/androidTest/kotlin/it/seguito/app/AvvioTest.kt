@@ -35,6 +35,7 @@ class AvvioTest {
         compose.onAllNodes(hasSetTextAction())[0].performTextInput("http://seguito.example.it")
         compose.onNodeWithText("Salva e verifica").performClick()
         compose.waitForIdle()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("per Internet serve HTTPS", substring = true))
         compose.onNodeWithText("per Internet serve HTTPS", substring = true).assertIsDisplayed()
     }
 }
