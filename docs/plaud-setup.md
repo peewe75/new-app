@@ -33,6 +33,21 @@ Il Note Pro registra le telefonate con un **sensore a conduzione di vibrazioni**
 
 > **Prima di premere il pulsante.** Non registrare le telefonate con i colleghi: l'art. 38, comma 2, del Codice deontologico forense lo vieta. Le riunioni con colleghi si registrano solo con il consenso di tutti i presenti, da chiedere e da far risultare all'inizio della registrazione. Con i clienti e con i terzi, informali della registrazione (vedi [privacy-e-deontologia.md](privacy-e-deontologia.md)). Seguito segnala le conversazioni con i colleghi, ma la scelta di registrare spetta all'avvocato.
 
+### Telefonate registrate con il Samsung Galaxy S25
+
+Quando il Note Pro non è a portata di mano, la telefonata si può registrare con la funzione del telefono e poi passare a Plaud, che la trascrive come le altre. Da lì Seguito la trova da solo, senza altri passaggi.
+
+1. **Attiva la registrazione** nell'app Telefono di Samsung: **⋮ → Impostazioni → Registra chiamate**. Sui telefoni venduti in Italia la registrazione si avvia a mano durante ogni chiamata, con il pulsante **Registra** che compare dopo la risposta. L'interlocutore sente un avviso vocale, che non si può disattivare. Se nelle impostazioni trovi anche la registrazione automatica (per tutte le chiamate o per numeri scelti), puoi usarla, ma l'avviso resta.
+2. **Dopo la chiamata** apri **Telefono → Recenti**, tocca la chiamata, poi la registrazione, e scegli **Condividi → Plaud**. In alternativa apri l'app Plaud, tocca **Registra → Importa audio** e scegli il file nella cartella **Recordings/Call** della memoria del telefono (app **Archivio**). Il nome del file contiene il nome del contatto, o il numero se non è in rubrica, e la data: aiuta Seguito a riconoscere il cliente.
+3. Con **AutoFlow** attivo (vedi il capitolo 4) Plaud trascrive e riassume il file appena importato. Altrimenti apri il file nell'app Plaud e tocca **Genera**, scegliendo il template «Seguito – Post-chiamata».
+4. Seguito trova la registrazione al controllo successivo, come una registrazione fatta con il Note Pro.
+
+Da sapere:
+
+- I minuti del piano Starter si sbloccano dopo l'abbinamento del Note Pro all'account. Con ogni probabilità anche le trascrizioni dei file importati consumano quei minuti: verificalo la prima volta, confrontando i minuti residui prima e dopo l'importazione.
+- Plaud accetta file fino a 5 ore. La registrazione del Samsung non funziona con gli auricolari collegati e, secondo alcune segnalazioni, durante le chiamate Wi-Fi: la prima volta controlla che il file contenga entrambe le voci.
+- La regola sui colleghi vale allo stesso modo: non registrare le telefonate con altri avvocati. Seguito lo segnala comunque, se succede.
+
 ## 4. Il template di riassunto «Seguito – Post-chiamata»
 
 Plaud prepara un riassunto di ogni registrazione secondo un template. Con un template dedicato il riassunto segue le stesse sezioni che Seguito usa. Claude lo riceve come aiuto, anche se la fonte che prevale resta la trascrizione.
@@ -43,6 +58,7 @@ Plaud prepara un riassunto di ogni registrazione secondo un template. Con un tem
 4. Incolla come descrizione il testo qui sotto e conferma la creazione.
 5. Il template resta **privato**: non pubblicarlo nella community.
 6. Se l'app lo consente, impostalo come template predefinito. Altrimenti sceglilo ogni volta che generi il riassunto.
+7. **AutoFlow.** Nelle impostazioni dell'app attiva **AutoFlow** (generazione automatica) con il template «Seguito – Post-chiamata» e la lingua italiana. Plaud genera allora trascrizione e riassunto appena una registrazione arriva nell'app, sia dal Note Pro sia da un file importato, senza dover toccare **Genera** ogni volta. Ogni trascrizione consuma i minuti del piano: le registrazioni da non trascrivere, come una telefonata con un collega fatta per errore, vanno cancellate prima che arrivino nell'app.
 
 ```text
 Sei l'assistente di uno studio legale italiano. Dalla registrazione di una telefonata o di una riunione dell'avvocato dello studio prepara un riepilogo operativo in italiano, con le sezioni seguenti, in quest'ordine e con questi titoli.
