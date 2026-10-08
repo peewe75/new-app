@@ -1,0 +1,21 @@
+name: App Android
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  ambiente:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SDK Android disponibile
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools" || true
+          java -version
