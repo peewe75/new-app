@@ -110,7 +110,8 @@ const TokenResponseSchema = z.object({
   expires_in: z.coerce.number().positive(),
 });
 
-const TokenErrorSchema = z.object({ error: z.string(), error_codes: z.array(z.number()).optional() });
+/** Microsoft chiede di decidere su `error` e `suberror`, non sui codici numerici AADSTS. */
+const TokenErrorSchema = z.object({ error: z.string(), suberror: z.string().optional() });
 
 const MeSchema = z.object({
   displayName: z.string().nullable().optional(),
@@ -313,8 +314,7 @@ function tokenError(json: unknown, refreshing: boolean): Microsoft365AuthError {
   const error = parsed.success ? parsed.data.error : "";
   if (error === "invalid_client") return new Microsoft365AuthError(MESSAGES.badClient, "configurazione");
   if (error === "invalid_grant" || error === "interaction_required") {
-    // AADSTS65001: consenso mancante per i permessi richiesti.
-    if (parsed.success && parsed.data.error_codes?.includes(65001)) {
+    if (parsed.success && parsed.data.suberror === "consent_required") {
       return new Microsoft365AuthError(MESSAGES.consent, "configurazione");
     }
     return refreshing

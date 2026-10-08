@@ -34,10 +34,16 @@ App per lo studio dell'Avv. Vincenzo Sapone (Cantù). Dopo una telefonata o una 
 ## Domande aperte (chiedere all'avvocato)
 
 1. Gestionale: il gestionale attuale è vecchio e senza API, e ne state costruendo uno nuovo? Chi lo sviluppa, con quale tecnologia (per esempio su Supabase), e Seguito deve scrivere direttamente lì?
+2. Pubblicazione su Supabase + Netlify (decisione 15): quale delle due strade? Vincoli verificati l'8 ottobre 2026 sulla documentazione ufficiale:
+   - Netlify Free e Personal eseguono le funzioni negli Stati Uniti (Ohio); Francoforte richiede Netlify Pro (20 $/mese). Con Free, se i crediti finiscono, il sito viene sospeso.
+   - Supabase Free sospende il progetto dopo una settimana senza attività e non ha backup: per dati dei clienti serve Supabase Pro (da 25 $/mese), regione eu-central-1 (Francoforte), non la generica «Europe».
+   - **Strada A (consigliata)**: Netlify Pro con le funzioni a Francoforte + Supabase Pro a Francoforte, circa 45 $/mese. Il codice Node attuale gira quasi senza modifiche; l'analisi con Claude ha fino a 15 minuti (funzioni in background).
+   - **Strada B**: Netlify Free solo per la PWA + tutta l'elaborazione nelle Edge Functions di Supabase a Francoforte, circa 25 $/mese. Va riscritta parte del codice per Deno e l'analisi deve stare entro 400 secondi.
+   - In entrambe: DPA da firmare con Supabase (dalla dashboard) e con Netlify; accesso con email, password e codice TOTP (Supabase Auth); token Microsoft e Plaud cifrati in Supabase Vault.
 
 ## Prossimi passi
 
 1. Completare e verificare la prima versione (vedi `docs/specifica-tecnica.md`).
 2. Quando arriva il Plaud: configurare il template, fare il login CLI, eseguire `npm run poll` su chiamate vere e confrontare le estrazioni.
 3. Collegamento Microsoft 365: fatto (vedi `docs/microsoft365-setup.md`); resta da registrare l'applicazione nel tenant dello studio. Adattatore per il gestionale reale, dopo il chiarimento sulla decisione 16.
-4. Pubblicazione come PWA protetta da password, con accesso dal telefono.
+4. Pubblicazione come PWA protetta da password, con accesso dal telefono, dopo la scelta della strada (domanda aperta 2).

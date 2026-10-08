@@ -229,6 +229,15 @@ describe("Microsoft365Auth", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("riconosce il consenso mancante dal campo suberror", async () => {
+    const store = connectedStore({ expiresAt: NOW.getTime() - 1000 });
+    const { fetchImpl } = fakeFetch(() => ({
+      status: 400,
+      json: { error: "invalid_grant", suberror: "consent_required", error_codes: [65001] },
+    }));
+    await expect(makeAuth(store, fetchImpl).accessToken()).rejects.toMatchObject({ reason: "configurazione" });
+  });
+
   it("con il rinnovo revocato scollega l'account e chiede di ricollegarlo", async () => {
     const store = connectedStore({ expiresAt: NOW.getTime() - 1000 });
     const { fetchImpl } = fakeFetch(() => ({ status: 400, json: { error: "invalid_grant", error_codes: [70008] } }));

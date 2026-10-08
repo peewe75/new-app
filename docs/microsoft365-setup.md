@@ -85,5 +85,6 @@ Outlook ammette un solo promemoria per evento: Seguito usa il più importante (u
 | «Microsoft 365 non ha confermato l'operazione, che potrebbe essere già stata eseguita» | La rete o il servizio non hanno risposto dopo l'invio della richiesta. Controlla in Outlook (calendario, Bozze o Posta inviata): se l'elemento c'è, non approvare di nuovo quell'azione. Gli eventi hanno comunque un identificativo che impedisce i doppioni. |
 | «Il collegamento a Microsoft 365 è scaduto o è stato revocato» | Il collegamento dura finché viene usato; dopo un lungo periodo di inattività, o se la password è cambiata, va ripetuto. |
 | «Credenziali dell'applicazione Microsoft non valide» | Il segreto è scaduto o è stato copiato male: creane uno nuovo (passo 2). |
+| Entra non consente di creare il segreto | Il tenant blocca i segreti delle applicazioni (per esempio con la «modalità di sicurezza di base» di Microsoft 365): serve l'accesso con certificato, da aggiungere a Seguito. |
 | «L'applicazione non ha ancora i permessi richiesti» | Manca il consenso amministratore (passo 3). |
 | Dopo l'accesso, errore di Microsoft sull'indirizzo di reindirizzamento | L'indirizzo registrato (passo 1) e `SEGUITO_M365_REDIRECT_URI` devono coincidere carattere per carattere. |
