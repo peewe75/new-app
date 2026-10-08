@@ -125,6 +125,11 @@ export class PhoneInbox {
     this.retryDelays = opts.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
   }
 
+  /** Dimensione massima di una registrazione, in byte. */
+  get maxBytes(): number {
+    return this.opts.maxBytes;
+  }
+
   /** Riceve una registrazione; se lo stesso audio è già arrivato restituisce quella esistente. */
   async receive(body: Readable, meta: ReceiveMeta): Promise<{ upload: PhoneUpload; created: boolean }> {
     await mkdir(this.opts.dir, { recursive: true, mode: DIR_MODE });

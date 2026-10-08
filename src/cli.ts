@@ -26,9 +26,11 @@ import {
 } from "./pipeline.js";
 import { createAppServer, type AppServices } from "./server/app.js";
 import { FileSource } from "./sources/file-source.js";
+import { PhoneInbox } from "./phone/phone-inbox.js";
 import { PlaudApiSource } from "./sources/plaud-api.js";
 import type { RecordingSource } from "./sources/source.js";
 import { JsonFileStore, writeFileAtomic } from "./store/json-store.js";
+import { SpeechmaticsTranscriber } from "./transcribe/speechmatics.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURE_RECORDINGS = join(ROOT, "fixtures", "plaud");
@@ -149,9 +151,12 @@ async function serve(args: string[]): Promise<CommandResult> {
     services.microsoft365 = microsoftServices(microsoft, config);
     await printMicrosoftStatus(microsoft, config);
   }
+  const extractor = config.claude.apiKeyPresent ? claudeExtractor(config, "npm run serve") : null;
+  const phone = await startPhoneInbox(config, stored, extractor);
+  if (phone !== null) services.phone = phone;
   const plaudLinked = existsSync(config.plaud.tokensPath);
-  if (plaudLinked && config.claude.apiKeyPresent) {
-    const deps: PipelineDeps = { ...stored, extractor: claudeExtractor(config, "npm run serve") };
+  if (plaudLinked && extractor !== null) {
+    const deps: PipelineDeps = { ...stored, extractor };
     const source = PlaudApiSource.fromConfig(config);
     services.sync = () => syncWithoutThrowing(source, deps);
   } else {
@@ -294,6 +299,55 @@ function storedProposalServices(deps: StoredProposalDeps, config: AppConfig): Ap
     approve: (proposalId, request) => approveStoredProposal(proposalId, request, deps),
     discard: (proposalId) => discardStoredProposal(proposalId, deps),
   };
+}
+
+/**
+ * Ricezione delle chiamate registrate con lo smartphone: servono la chiave di
+ * Speechmatics (trascrizione) e quella di Claude (analisi). All'avvio riprende
+ * le registrazioni rimaste a metà.
+ */
+async function startPhoneInbox(
+  config: AppConfig,
+  stored: StoredProposalDeps,
+  extractor: Extractor | null,
+): Promise<PhoneInbox | null> {
+  const { speechmatics } = config.phone;
+  if (speechmatics.apiKey === null) {
+    console.log("Ricezione delle chiamate dal telefono non attiva: impostare SPEECHMATICS_API_KEY (docs/telefono-samsung.md).");
+    return null;
+  }
+  if (extractor === null) {
+    console.log("Ricezione delle chiamate dal telefono non attiva: serve anche la chiave di Claude (ANTHROPIC_API_KEY).");
+    return null;
+  }
+  let host: string;
+  try {
+    host = new URL(speechmatics.url).hostname;
+  } catch {
+    throw new CliError(`Indirizzo non valido in SPEECHMATICS_URL: «${speechmatics.url}».`);
+  }
+  if (!/^eu\d*\./.test(host)) {
+    console.error(
+      `Attenzione: SPEECHMATICS_URL (${host}) non è la regione UE di Speechmatics: l'audio delle chiamate uscirebbe dall'Unione europea.`,
+    );
+  }
+  if (config.server.password === null) {
+    console.error("Attenzione: senza SEGUITO_PASSWORD Seguito rifiuta le registrazioni inviate dal telefono.");
+  }
+  const inbox = new PhoneInbox({
+    dir: config.phone.dir,
+    transcriber: new SpeechmaticsTranscriber({
+      apiKey: speechmatics.apiKey,
+      baseUrl: speechmatics.url,
+      vocabulary: speechmatics.vocabulary,
+    }),
+    deps: { ...stored, extractor },
+    maxBytes: config.phone.maxBytes,
+    log: (message) => console.log(message),
+  });
+  await inbox.resume();
+  console.log(`Ricezione delle chiamate dal telefono attiva (trascrizione: Speechmatics, ${host}).`);
+  return inbox;
 }
 
 function microsoftServices({ auth }: Microsoft365, config: AppConfig): NonNullable<AppServices["microsoft365"]> {

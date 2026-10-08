@@ -79,6 +79,15 @@ Se lo studio usa Outlook, Seguito crea gli eventi direttamente nel calendario e 
 
 Finché l'account non è collegato, le azioni di calendario ed email restano in errore e si eseguono approvandole di nuovo dopo il collegamento; le note nel gestionale procedono comunque.
 
+## Con le chiamate registrate dal telefono
+
+Sul Samsung Galaxy S25 l'app **Seguito per Android** trova le chiamate registrate con la funzione nativa del telefono e, dopo la tua conferma, le invia a Seguito senza passare da Plaud. Seguito le trascrive con Speechmatics (server nell'UE), le analizza con Claude e propone le azioni da approvare, come per il Plaud. Le chiamate con i colleghi non partono: i contatti salvati come «Avv.», «Avvocato» o «Studio legale» sono sempre esclusi.
+
+1. In `.env`: `SPEECHMATICS_API_KEY` (account e chiave sul [Portale di Speechmatics](https://portal.speechmatics.com)), `SEGUITO_PASSWORD` e `SEGUITO_HOST=0.0.0.0`; poi `npm run serve`.
+2. Sul telefono installa l'app da <https://github.com/peewe75/new-app/releases/download/app-android/Seguito.apk> e indica indirizzo del computer, password e cartella **Recordings**.
+
+Installazione, rete (Wi-Fi dello studio o Tailscale), costi, accordo sul trattamento dei dati con Speechmatics e problemi frequenti sono in [docs/telefono-samsung.md](docs/telefono-samsung.md).
+
 ## Trascrizioni esportate
 
 Per analizzare trascrizioni già scaricate, indica un file o una cartella:
@@ -127,6 +136,10 @@ Copia `.env.example` in `.env` e completa i valori. Il file `.env` contiene la c
 | `SEGUITO_M365_CLIENT_SECRET` | vuoto | Segreto dell'applicazione. Con questi tre valori eventi e bozze vanno in Outlook; senza, Seguito produce file `.ics` ed `.eml`. |
 | `SEGUITO_M365_REDIRECT_URI` | `http://localhost:<porta>/auth/microsoft/callback` | Indirizzo di ritorno dopo l'accesso Microsoft: deve coincidere con quello registrato. |
 | `SEGUITO_M365_TOKENS_FILE` | `./data/microsoft365.json` | Token dell'account collegato (file leggibile solo dall'utente che esegue Seguito). |
+| `SPEECHMATICS_API_KEY` | vuoto | Chiave di Speechmatics per trascrivere le chiamate inviate dal telefono. Con questa, la chiave di Claude e `SEGUITO_PASSWORD`, `serve` riceve le registrazioni dall'app Android. |
+| `SPEECHMATICS_URL` | `https://eu1.asr.api.speechmatics.com/v2` | Indirizzo dell'API di Speechmatics (regione UE). Va cambiato solo su indicazione di Speechmatics, restando nell'UE. |
+| `SEGUITO_TELEFONO_VOCABOLARIO` | vuoto | Nomi e termini, separati da virgole, che la trascrizione deve riconoscere meglio (oltre ai termini giuridici già previsti). |
+| `SEGUITO_TELEFONO_MAX_MB` | `500` | Dimensione massima di una registrazione inviata dal telefono. |
 | `SEGUITO_TRASCRIZIONE` | `bozza` | Con `invio` la trascrizione è inviata direttamente alla casella dello studio (solo a quella e solo con Microsoft 365); altrimenti resta una bozza. |
 
 Per usi particolari esistono anche `PLAUD_API_BASE` e `PLAUD_REFRESH_URL`, che di norma non vanno toccate.
@@ -160,7 +173,7 @@ Le azioni non spuntate non vengono eseguite, ma restano nella proposta: si posso
 - **Conflitto di interessi e controparte assistita.** Una controparte che risulta cliente dello studio produce l'avviso «Possibile conflitto di interessi» (art. 24 CDF); le email dirette alla controparte ricordano l'art. 41 CDF. In entrambi i casi l'azione non è preselezionata.
 - **Collegamento al cliente.** Il solo cognome non basta per collegare un partecipante a un cliente del gestionale; il nome indicato nel campo «Cliente» dell'incarico prevale sempre.
 - **Evidenze.** Ogni azione cita il minuto e la frase della trascrizione. Le citazioni che non si ritrovano nel testo vengono segnalate.
-- **Dati.** Trascrizioni, proposte e file generati restano sul computer dello studio, in cartelle accessibili solo all'utente che esegue Seguito. La trascrizione passa da Plaud e, per l'analisi, da Anthropic: con entrambi va firmato l'accordo sul trattamento dei dati (DPA).
+- **Dati.** Trascrizioni, proposte e file generati restano sul computer dello studio, in cartelle accessibili solo all'utente che esegue Seguito. La trascrizione passa da Plaud (o da Speechmatics per le chiamate inviate dal telefono) e, per l'analisi, da Anthropic: con ciascuno va firmato l'accordo sul trattamento dei dati (DPA). L'audio inviato dal telefono si cancella dal computer appena la trascrizione è archiviata, e da Speechmatics appena la trascrizione è pronta.
 
 - **Interfaccia.** Risponde solo agli indirizzi IP, a `localhost` e ai nomi autorizzati (`SEGUITO_ALLOWED_HOSTS`), così una pagina web esterna non può leggere le proposte né approvarle tramite il DNS rebinding.
 
@@ -176,12 +189,15 @@ src/
   enrich/      collegamento al gestionale (interfaccia e versione su file JSON)
   actions/     esecuzione delle azioni approvate: eventi, bozze (file o servizio collegato), note nel gestionale
   connectors/  servizi collegati: Microsoft 365 (accesso, Microsoft Graph, calendario e bozze)
+  phone/       ricezione delle chiamate registrate inviate dall'app Android
+  transcribe/  trascrizione dell'audio del telefono (Speechmatics, regione UE)
   store/       archivio locale di registrazioni e proposte
   server/      server HTTP e interfaccia web di approvazione (ui/)
   pipeline.ts  dalla registrazione alla proposta, sincronizzazione con la fonte
   cli.ts       comandi demo, serve, poll, ingest
   config.ts    configurazione dalle variabili d'ambiente
 fixtures/      telefonate di esempio (plaud/), analisi pronte (extractions/), gestionale di esempio
+android/      app Android che invia a Seguito le chiamate registrate dal telefono (APK compilato da GitHub Actions)
 docs/          architettura, configurazione del Plaud, privacy e deontologia, decisioni di progetto
 tests/         test automatici (Vitest)
 ```

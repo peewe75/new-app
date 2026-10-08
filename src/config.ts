@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { StudioProfile } from "./domain/types.js";
+import { SPEECHMATICS_EU_URL } from "./transcribe/speechmatics.js";
 
 export interface AppConfig {
   studio: StudioProfile;
@@ -24,6 +25,22 @@ export interface AppConfig {
   };
   plaud: { apiBase: string; tokensPath: string; refreshUrl: string; region: string | null };
   microsoft365: Microsoft365Config;
+  phone: PhoneConfig;
+}
+
+/** Chiamate registrate con lo smartphone, trascritte da Speechmatics (regione UE). */
+export interface PhoneConfig {
+  /** Cartella delle registrazioni ricevute (stato e audio in attesa di trascrizione). */
+  dir: string;
+  /** Dimensione massima di una registrazione, in byte. */
+  maxBytes: number;
+  speechmatics: {
+    apiKey: string | null;
+    /** Indirizzo dell'API: regione UE salvo diversa indicazione. */
+    url: string;
+    /** Parole in più da riconoscere (nomi di clienti ricorrenti, termini tecnici). */
+    vocabulary: string[];
+  };
 }
 
 /** Collegamento a Microsoft 365 (bozze in Outlook ed eventi nel calendario). */
@@ -57,6 +74,7 @@ function envOrNull(name: string): string | null {
 
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 const DEFAULT_MAX_TOKENS = 16000;
+const DEFAULT_PHONE_MAX_MB = 500;
 
 export function loadConfig(): AppConfig {
   const lawyerName = env("SEGUITO_LAWYER_NAME", "Avv. Vincenzo Sapone");
@@ -104,6 +122,23 @@ export function loadConfig(): AppConfig {
       region: envOrNull("PLAUD_REGION"),
     },
     microsoft365: microsoft365Config(dataDir, serverPort),
+    phone: phoneConfig(dataDir),
+  };
+}
+
+function phoneConfig(dataDir: string): PhoneConfig {
+  const maxMb = Number(env("SEGUITO_TELEFONO_MAX_MB", String(DEFAULT_PHONE_MAX_MB)).replace(",", "."));
+  return {
+    dir: join(dataDir, "telefono"),
+    maxBytes: Math.floor((Number.isFinite(maxMb) && maxMb > 0 ? maxMb : DEFAULT_PHONE_MAX_MB) * 1024 * 1024),
+    speechmatics: {
+      apiKey: envOrNull("SPEECHMATICS_API_KEY"),
+      url: env("SPEECHMATICS_URL", SPEECHMATICS_EU_URL),
+      vocabulary: env("SEGUITO_TELEFONO_VOCABOLARIO", "")
+        .split(",")
+        .map((word) => word.trim())
+        .filter((word) => word !== ""),
+    },
   };
 }
 

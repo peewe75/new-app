@@ -73,7 +73,37 @@ Nell'app, l'elenco **Registrazioni** mostra lo stato di ogni chiamata: da confer
 
 ## Trascrizione
 
-Le registrazioni del telefono non passano da Plaud: le trascrive un servizio di trascrizione nell'Unione europea, con riconoscimento di chi parla. Il servizio, le variabili da impostare in `.env` e l'accordo sul trattamento dei dati sono descritti nella sezione dedicata del README.
+Le registrazioni del telefono non passano da Plaud: le trascrive **Speechmatics** sui server dell'Unione europea (regione EU1), in italiano, con il modello *enhanced* (il più accurato) e il riconoscimento di chi parla.
+
+1. Crea l'account dello studio sul [Portale di Speechmatics](https://portal.speechmatics.com). Il credito gratuito iniziale basta per le prove.
+2. In **Settings → API Keys** crea una chiave, per esempio «Seguito studio», e copiala.
+3. Nel file `.env` del computer dello studio:
+
+   ```bash
+   SPEECHMATICS_API_KEY=<la chiave>
+   # facoltativo: nomi e termini da riconoscere meglio, separati da virgole
+   SEGUITO_TELEFONO_VOCABOLARIO=Esposito,Tribunale di Nola
+   ```
+
+4. Riavvia Seguito. All'avvio compare «Ricezione delle chiamate dal telefono attiva (trascrizione: Speechmatics, eu1.asr.api.speechmatics.com)».
+
+Che cosa succede a ogni chiamata:
+
+- Seguito invia l'audio a Speechmatics con un nome neutro (nessun nome del cliente nei dati del lavoro) e un vocabolario di termini giuridici, più quelli di `SEGUITO_TELEFONO_VOCABOLARIO`;
+- appena ha la trascrizione chiede a Speechmatics di cancellare audio e testo; se la cancellazione non riesce, Speechmatics li elimina comunque dopo 7 giorni;
+- sul computer dello studio l'audio si cancella dopo l'archiviazione della trascrizione;
+- se Speechmatics non risponde o è sovraccarico, Seguito riprova da solo (dopo 1, 5, 15 minuti, 1 ora e 6 ore). Una chiave errata o un credito esaurito restano in errore finché non li correggi e tocchi **Riprova**.
+
+La chiave di Speechmatics resta sul computer: l'app sul telefono non la conosce.
+
+**Costi.** Si paga a ore di audio trascritto. A ottobre 2026 il modello *enhanced* costava circa 0,40 $ l'ora, ma questo prezzo non è stato verificato sul listino ufficiale: controllalo nel Portale prima di attivare il servizio.
+
+**Accordo sul trattamento dei dati (DPA).** Speechmatics tratta l'audio come responsabile del trattamento (art. 28 GDPR). Per gli account self-service l'accordo è nei Termini di servizio. Prima di inviare chiamate vere con i clienti:
+
+- chiedi al [supporto di Speechmatics](https://support.speechmatics.com) il DPA da firmare;
+- chiedi anche una conferma scritta che l'audio non viene usato per addestrare i modelli.
+
+Fino ad allora usa solo registrazioni di prova.
 
 ## Privacy e deontologia
 
@@ -112,4 +142,6 @@ Dal 2027 Android chiederà che anche le app installate fuori dal Play Store veng
 | «la ricezione dal telefono non è attiva» | Sul computer mancano la chiave di Claude o il servizio di trascrizione. |
 | Nessuna notifica dopo la chiamata | Controlla di aver toccato **Registra** durante la chiamata, il permesso delle notifiche e le limitazioni della batteria. **Controlla ora** forza la ricerca. |
 | «Il permesso sulla cartella non è più valido» | Scegli di nuovo la cartella nell'app. |
+| «Chiave di Speechmatics non valida» | Controlla `SPEECHMATICS_API_KEY` nel file `.env`, riavvia Seguito e tocca **Riprova**. |
+| «licenza o crediti esauriti» | Ricarica il credito o attiva il piano nel Portale di Speechmatics, poi tocca **Riprova**. |
 | La trascrizione è vuota | La registrazione non contiene voci: per esempio con gli auricolari collegati il Samsung non registra l'interlocutore. |
