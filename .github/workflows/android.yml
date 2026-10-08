@@ -7,19 +7,67 @@ on:
       - "android/**"
       - ".github/workflows/android.yml"
 
-permissions:
-  contents: read
+concurrency:
+  group: app-android-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  ambiente:
+  apk:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Versioni stabili delle librerie Android
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Con i segreti della chiave dello studio l'APK si aggiorna sopra la versione installata;
+      # senza, è firmato con una chiave di prova diversa a ogni compilazione.
+      - name: Chiave di firma (facoltativa)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SEGUITO_KEYSTORE_BASE64 }}
         run: |
-          for a in com/android/tools/build/gradle androidx/compose/compose-bom androidx/activity/activity-compose \
-                   androidx/work/work-runtime-ktx androidx/core/core-ktx androidx/documentfile/documentfile \
-                   androidx/lifecycle/lifecycle-runtime-compose androidx/browser/browser; do
-            v=$(curl -s "https://dl.google.com/dl/android/maven2/$a/maven-metadata.xml" \
-              | grep -oE "<version>[0-9.]+</version>" | sed -E 's#</?version>##g' | tail -25 | tr '\n' ' ')
-            echo "$a: $v"
-          done
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/seguito.jks"
+            echo "SEGUITO_KEYSTORE_FILE=$RUNNER_TEMP/seguito.jks" >> "$GITHUB_ENV"
+            echo "Firma con la chiave dello studio."
+          else
+            echo "Nessuna chiave dello studio: firma di prova."
+          fi
+
+      - name: Test e APK
+        working-directory: android
+        env:
+          SEGUITO_VERSION_CODE: ${{ github.run_number }}
+          SEGUITO_KEYSTORE_PASSWORD: ${{ secrets.SEGUITO_KEYSTORE_PASSWORD }}
+          SEGUITO_KEY_ALIAS: ${{ secrets.SEGUITO_KEY_ALIAS }}
+          SEGUITO_KEY_PASSWORD: ${{ secrets.SEGUITO_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon testDebugUnitTest assembleRelease
+
+      - name: Nome del file
+        run: cp android/app/build/outputs/apk/release/app-release.apk Seguito.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Seguito-apk
+          path: Seguito.apk
+          retention-days: 30
+
+      # Release «app-android»: dal telefono si scarica sempre l'ultima versione allo stesso indirizzo.
+      - name: Pubblica l'APK
+        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="APK di Seguito per Android (compilazione ${{ github.run_number }}, commit ${GITHUB_SHA::7}). Istruzioni: docs/telefono-samsung.md"
+          if gh release view app-android > /dev/null 2>&1; then
+            gh release edit app-android --notes "$notes"
+          else
+            gh release create app-android --title "Seguito per Android" --notes "$notes" --target "$GITHUB_SHA"
+          fi
+          gh release upload app-android Seguito.apk --clobber
