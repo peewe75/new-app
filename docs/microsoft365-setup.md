@@ -38,9 +38,10 @@ Quando Seguito sarà pubblicato online, aggiungerai in **Autenticazione** anche 
    - `Calendars.ReadWrite` (creare gli eventi);
    - `offline_access` (restare collegati senza ripetere l'accesso);
    - `Mail.Send`, **solo** se vuoi l'invio diretto della trascrizione allo studio (`SEGUITO_TRASCRIZIONE=invio`).
-2. Premi **Concedi consenso amministratore per …** e conferma.
+2. Premi **Concedi consenso amministratore per …** e conferma. È indispensabile: con le impostazioni predefinite di Microsoft gli utenti non possono più concedere da soli i permessi su posta e calendario.
+3. Consigliato: in **Applicazioni aziendali → Seguito → Proprietà** imposta **Assegnazione obbligatoria** su *Sì*, poi in **Utenti e gruppi** assegna solo l'account dell'avvocato. Così nessun altro account del tenant può collegarsi a Seguito.
 
-Sono autorizzazioni *delegate*: Seguito agisce solo sulla casella e sul calendario dell'account che si collega, non sulle altre caselle dello studio.
+Sono autorizzazioni *delegate*: Seguito agisce solo sulla casella e sul calendario dell'account che si collega, non sulle altre caselle dello studio. Seguito non aggiunge mai partecipanti agli eventi: Outlook invierebbe gli inviti in automatico.
 
 ## 4. Configurare Seguito
 
@@ -57,7 +58,9 @@ SEGUITO_M365_CLIENT_SECRET=<valore del segreto>
 
 Avvia Seguito con `npm run serve`, apri **<http://localhost:3000>** (proprio `localhost`, lo stesso nome dell'indirizzo di reindirizzamento) e premi **Collega Microsoft 365**. Accedi con l'account dell'avvocato: Seguito torna all'elenco con «Microsoft 365 collegato».
 
-I token restano nel file `data/microsoft365.json` (o in `SEGUITO_M365_TOKENS_FILE`), leggibile solo dall'utente che esegue Seguito, e si rinnovano da soli. **Scollega**, nell'elenco delle registrazioni, cancella il file.
+I token restano nel file `data/microsoft365.json` (o in `SEGUITO_M365_TOKENS_FILE`), leggibile solo dall'utente che esegue Seguito, e si rinnovano da soli a ogni uso. Il collegamento scade dopo 90 giorni senza utilizzo, o prima se la password dell'account viene cambiata o le sessioni vengono revocate: in quel caso Seguito chiede di ricollegarlo. **Scollega**, nell'elenco delle registrazioni, cancella il file.
+
+Per la versione pubblicata online conviene una seconda registrazione («Seguito», distinta da quella di prova) con l'indirizzo pubblico e, al posto del segreto, un certificato, come raccomanda Microsoft per gli ambienti di produzione.
 
 ## Come appaiono eventi e bozze
 
@@ -68,7 +71,7 @@ I token restano nel file `data/microsoft365.json` (o in `SEGUITO_M365_TOKENS_FIL
 | Email, appuntamento da fissare | Bozza nella cartella Bozze, con la firma dello studio. |
 | Invio della trascrizione | Bozza alla casella dello studio, con la trascrizione anche in allegato; con `SEGUITO_TRASCRIZIONE=invio` è inviata direttamente. |
 
-Dopo l'approvazione, ogni azione ha il link **Apri nel calendario** o **Apri la bozza in Outlook**.
+Dopo l'approvazione, ogni azione ha il link **Apri nel calendario** o **Apri la bozza in Outlook**. Per vedere gli eventi di Seguito colorati, crea in Outlook una categoria chiamata `Seguito` e assegnale un colore.
 
 Outlook ammette un solo promemoria per evento: Seguito usa il più importante (un'ora prima per gli appuntamenti, 7 giorni prima per le scadenze). I file `.ics` della versione senza Microsoft 365 ne hanno due.
 
