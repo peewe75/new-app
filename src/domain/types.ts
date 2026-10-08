@@ -316,12 +316,18 @@ export const ProposalParticipantSchema = ExtractedParticipantSchema.omit({ evide
 export type ProposalParticipant = z.infer<typeof ProposalParticipantSchema>;
 
 export const ExecutionArtifactSchema = z.object({
-  kind: z.enum(["ics", "eml", "gestionale", "altro"]),
+  /**
+   * File generati (ics, eml), note del gestionale, oppure elementi creati in un
+   * servizio collegato: evento di calendario, bozza nella casella, email inviata.
+   */
+  kind: z.enum(["ics", "eml", "gestionale", "evento_calendario", "bozza_email", "email_inviata", "altro"]),
   label: z.string(),
   /** Percorso relativo alla cartella outbox (per i file generati). */
   path: z.string().nullable(),
-  /** Riferimento esterno (es. id nota nel gestionale). */
+  /** Riferimento esterno (es. id nota nel gestionale, id dell'evento in Outlook). */
   ref: z.string().nullable(),
+  /** Indirizzo per aprire l'elemento nel servizio collegato (es. Outlook sul web). */
+  url: z.string().nullable().optional(),
 });
 export type ExecutionArtifact = z.infer<typeof ExecutionArtifactSchema>;
 

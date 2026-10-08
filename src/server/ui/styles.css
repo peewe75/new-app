@@ -1330,3 +1330,43 @@ textarea.input {
     transition: none !important;
   }
 }
+
+/* Collegamento a Microsoft 365 nell'elenco delle registrazioni. */
+.connection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0 0 16px;
+  padding: 10px 12px 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.9375rem;
+}
+
+.connection__icon {
+  color: var(--success);
+}
+
+.connection__text {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.connection__account {
+  display: block;
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+.banner__action {
+  margin-top: 10px;
+}
+
+.container > .banner {
+  margin-bottom: 16px;
+}

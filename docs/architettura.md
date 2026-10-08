@@ -66,7 +66,8 @@ flowchart LR
 | **extract** | `src/extract/extractor.ts`, `prompt.ts`, `claude-extractor.ts`, `fixture-extractor.ts` | Interfaccia `Extractor`. `ClaudeExtractor` costruisce il prompt e chiede a Claude un `Extraction` conforme allo schema. `FixtureExtractor` legge analisi già pronte (demo e prove). |
 | **postprocess** | `src/extract/postprocess.ts` | Da `Extraction` a `Proposal`: verifica delle citazioni, collegamento dei partecipanti al gestionale, completamento degli indirizzi email, avvisi, preselezione e azione di sistema «invio della trascrizione». |
 | **enrich** | `src/enrich/case-management.ts`, `json-case-management.ts` | Interfaccia `CaseManagement` verso il gestionale e implementazione su file JSON: ricerca dei clienti con punteggio, anagrafiche, pratiche e note. |
-| **actions** | `src/actions/executor.ts`, `executors.ts`, `run.ts`, `ics.ts`, `eml.ts`, `format.ts` | Interfaccia `ActionExecutor`, esecutori predefiniti per ogni tipo di azione, flusso di approvazione (`approveProposal`, `discardProposal`), generazione dei file `.ics` ed `.eml`, testi in italiano. |
+| **actions** | `src/actions/executor.ts`, `executors.ts`, `office.ts`, `run.ts`, `ics.ts`, `eml.ts`, `format.ts` | Interfaccia `ActionExecutor`, esecutori predefiniti per ogni tipo di azione, flusso di approvazione (`approveProposal`, `discardProposal`), testi in italiano. Gli esecutori preparano eventi e bozze e li consegnano a un `Office`: `FileOffice` scrive i file `.ics` ed `.eml` nell'outbox. |
+| **connectors** | `src/connectors/microsoft365/` | `Microsoft365Office`: eventi nel calendario Outlook e bozze in Outlook tramite Microsoft Graph; accesso delegato OAuth 2.0 con PKCE (`auth.ts`), client Graph con nuovi tentativi e messaggi in italiano (`graph.ts`). |
 | **store** | `src/store/store.ts`, `json-store.ts` | Interfaccia `Store` e archivio su file JSON in `data/`: registrazioni, proposte, punti di sincronizzazione. Scritture atomiche, cartelle `0700`, file `0600`. |
 | **server** | `src/server/app.ts`, `src/server/ui/` | Server HTTP (solo `node:http`) con API JSON, download dei file dell'outbox e interfaccia web in JavaScript puro. Autenticazione Basic facoltativa e intestazioni di sicurezza restrittive. |
 | **pipeline** | `src/pipeline.ts` | `processRecording` (registrazione → proposta, una volta sola), `syncSource` (scarica dalla fonte le registrazioni nuove e le elabora, senza fermarsi al primo errore), `approveStoredProposal` e `discardStoredProposal` (approvazione e scarto delle proposte archiviate, usati dal server). |
@@ -159,7 +160,11 @@ Gli stessi formati sono letti da `FileSource`. I file in `fixtures/plaud/` sono 
 
 ## Aggiungere un collegamento
 
-### Un nuovo modo di eseguire le azioni (Google Calendar, Microsoft 365, ...)
+### Un nuovo calendario o una nuova casella di posta (Google Workspace, ...)
+
+Eventi e bozze passano dall'interfaccia `Office` (`src/actions/office.ts`): `createEvent`, `createDraft` e `deliverToStudio` ricevono il contenuto già pronto (titolo, descrizione, orari locali, destinatari, testo) e restituiscono l'`ExecutionArtifact` da mostrare. `Microsoft365Office` (`src/connectors/microsoft365/office.ts`) è l'esempio completo; un connettore Google seguirebbe lo stesso schema e si passa con `defaultExecutors(office)`. Gli errori per l'avvocato si lanciano come `ConnectorError`, con un messaggio in italiano senza dati personali.
+
+### Un nuovo modo di eseguire un tipo di azione
 
 Si implementa `ActionExecutor` (`src/actions/executor.ts`):
 

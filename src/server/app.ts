@@ -33,7 +33,21 @@ export interface AppServices {
   discard(proposalId: string): Promise<Proposal>;
   /** Sincronizzazione con la fonte delle registrazioni; assente se non configurata. */
   sync?: () => Promise<{ processed: number; skipped: number; errors: string[] }>;
+  /** Collegamento a Microsoft 365 (calendario e bozze); assente se non configurato. */
+  microsoft365?: Microsoft365Services;
 }
+
+export interface Microsoft365Services {
+  status(): Promise<{ connected: boolean; account: string | null }>;
+  /** Pagina di accesso Microsoft a cui inviare il browser. */
+  authorizationUrl(): string;
+  /** Completa l'accesso con i parametri dell'indirizzo di ritorno. */
+  complete(query: URLSearchParams): Promise<string>;
+  disconnect(): Promise<void>;
+}
+
+/** Esiti del collegamento a Microsoft 365 comunicati all'interfaccia (testi fissi lato interfaccia). */
+const MICROSOFT_OUTCOMES: ReadonlySet<string> = new Set(["collegato", "annullato", "scaduto", "configurazione", "errore"]);
 
 /** Riga dell'elenco proposte (GET /api/proposals). */
 export interface ProposalSummary {
@@ -91,6 +105,8 @@ const MESSAGES = {
   fileNotFound: "File non trovato.",
   badFilePath: "Percorso del file non valido.",
   syncUnavailable: "La sincronizzazione delle registrazioni non è configurata.",
+  microsoftUnavailable:
+    "Microsoft 365 non è configurato: impostare SEGUITO_M365_TENANT_ID, SEGUITO_M365_CLIENT_ID e SEGUITO_M365_CLIENT_SECRET.",
   methodNotAllowed: "Metodo non consentito per questo indirizzo.",
   busy: "È già in corso un'operazione su questa proposta: attendere che sia completata.",
   tooLarge: "Il corpo della richiesta supera il limite di 1 MB.",
@@ -197,10 +213,18 @@ function findRoute(ctx: AppContext, segments: readonly string[]): Route | null {
   if (count === 1 && first === "") return get((_req, res) => serveUiFile(res, "index.html"));
   if (first === "static" && count === 2 && second !== undefined) return get((_req, res) => serveUiFile(res, second));
   if (first === "outbox") return get((_req, res) => serveOutboxFile(res, ctx.services.outboxDir, segments.slice(1)));
+  if (first === "auth" && second === "microsoft") {
+    if (count === 2) return get((_req, res) => startMicrosoftLogin(ctx, res));
+    if (count === 3 && third === "callback") return get((req, res) => finishMicrosoftLogin(ctx, req, res));
+    return null;
+  }
   if (first !== "api") return null;
   if (count === 2 && second === "health") return get(async (_req, res) => sendJson(res, 200, { ok: true }));
-  if (count === 2 && second === "config") return get(async (_req, res) => sendJson(res, 200, publicConfig(ctx)));
+  if (count === 2 && second === "config") return get(async (_req, res) => sendJson(res, 200, await publicConfig(ctx)));
   if (count === 2 && second === "sync") return post((_req, res) => runSync(ctx, res));
+  if (count === 3 && second === "microsoft365" && third === "disconnect") {
+    return post((_req, res) => disconnectMicrosoft(ctx, res));
+  }
   if (second !== "proposals") return null;
   if (count === 2) return get((_req, res) => listProposals(ctx, res));
   if (third === undefined || third === "") return null;
@@ -214,14 +238,49 @@ function findRoute(ctx: AppContext, segments: readonly string[]): Route | null {
 // API
 // ---------------------------------------------------------------------------
 
-function publicConfig(ctx: AppContext): Record<string, unknown> {
-  const { studio } = ctx.services;
+async function publicConfig(ctx: AppContext): Promise<Record<string, unknown>> {
+  const { studio, microsoft365 } = ctx.services;
   return {
     studioName: studio.studioName,
     lawyerName: studio.lawyerName,
     timezone: studio.timezone,
     syncAvailable: ctx.sync !== null,
+    // null: Microsoft 365 non configurato; altrimenti stato del collegamento.
+    microsoft365: microsoft365 === undefined ? null : await microsoft365.status(),
   };
+}
+
+function requireMicrosoft(ctx: AppContext): Microsoft365Services {
+  const microsoft = ctx.services.microsoft365;
+  if (microsoft === undefined) throw new HttpError(404, MESSAGES.microsoftUnavailable);
+  return microsoft;
+}
+
+async function startMicrosoftLogin(ctx: AppContext, res: ServerResponse): Promise<void> {
+  const url = requireMicrosoft(ctx).authorizationUrl();
+  res.writeHead(302, { Location: url });
+  res.end();
+}
+
+/** Ritorno dalla pagina di accesso Microsoft: l'esito torna all'interfaccia come codice, mai come testo libero. */
+async function finishMicrosoftLogin(ctx: AppContext, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const microsoft = requireMicrosoft(ctx);
+  const query = new URL(req.url ?? "/", "http://seguito.invalid").searchParams;
+  let outcome = "collegato";
+  try {
+    await microsoft.complete(query);
+  } catch (err) {
+    const reason = err instanceof Error && "reason" in err ? String(err.reason) : "";
+    outcome = MICROSOFT_OUTCOMES.has(reason) ? reason : "errore";
+    if (outcome === "errore") console.error("[seguito] Collegamento a Microsoft 365 non riuscito:", err);
+  }
+  res.writeHead(302, { Location: `/?microsoft365=${outcome}` });
+  res.end();
+}
+
+async function disconnectMicrosoft(ctx: AppContext, res: ServerResponse): Promise<void> {
+  await requireMicrosoft(ctx).disconnect();
+  sendJson(res, 200, { ok: true });
 }
 
 function summarize(proposal: Proposal): ProposalSummary {

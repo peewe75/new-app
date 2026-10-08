@@ -7,7 +7,9 @@ import { readFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { defaultExecutors } from "./actions/executors.js";
 import { loadConfig, type AppConfig } from "./config.js";
+import { createMicrosoft365, type Microsoft365 } from "./connectors/microsoft365/index.js";
 import type { Recording } from "./domain/types.js";
 import { JsonCaseManagement } from "./enrich/json-case-management.js";
 import { ClaudeExtractor } from "./extract/claude-extractor.js";
@@ -134,13 +136,19 @@ async function demo(args: string[]): Promise<CommandResult> {
 async function serve(args: string[]): Promise<CommandResult> {
   parseArgs("serve", args, {}, 0);
   const config = loadConfig();
+  const microsoft = createMicrosoft365(config.microsoft365);
   const stored: StoredProposalDeps = {
     store: new JsonFileStore(config.dataDir),
     caseManagement: caseManagementFor(config, config.caseManagementFile),
     studio: config.studio,
     outboxDir: config.outboxDir,
+    ...(microsoft === null ? {} : { executors: defaultExecutors(microsoft.office) }),
   };
   const services = storedProposalServices(stored, config);
+  if (microsoft !== null) {
+    services.microsoft365 = microsoftServices(microsoft);
+    await printMicrosoftStatus(microsoft, config);
+  }
   const plaudLinked = existsSync(config.plaud.tokensPath);
   if (plaudLinked && config.claude.apiKeyPresent) {
     const deps: PipelineDeps = { ...stored, extractor: claudeExtractor(config, "npm run serve") };
@@ -286,6 +294,32 @@ function storedProposalServices(deps: StoredProposalDeps, config: AppConfig): Ap
     approve: (proposalId, request) => approveStoredProposal(proposalId, request, deps),
     discard: (proposalId) => discardStoredProposal(proposalId, deps),
   };
+}
+
+function microsoftServices({ auth }: Microsoft365): NonNullable<AppServices["microsoft365"]> {
+  return {
+    status: () => auth.status(),
+    authorizationUrl: () => auth.authorizationUrl(),
+    complete: (query) => auth.complete(query),
+    disconnect: () => auth.disconnect(),
+  };
+}
+
+async function printMicrosoftStatus({ auth }: Microsoft365, config: AppConfig): Promise<void> {
+  const { connected, account } = await auth.status();
+  const delivery =
+    config.microsoft365.transcriptDelivery === "invio"
+      ? "la trascrizione viene inviata alla casella dello studio"
+      : "anche la trascrizione resta in bozza";
+  if (connected) {
+    console.log(`Microsoft 365 collegato (${account}): eventi nel calendario Outlook e bozze in Outlook; ${delivery}.`);
+    return;
+  }
+  const callback = new URL(config.microsoft365.redirectUri);
+  console.log(
+    `Microsoft 365 configurato ma non collegato: aprire ${callback.origin}/ e scegliere «Collega Microsoft 365». ` +
+      "Fino ad allora le azioni di calendario ed email restano da eseguire.",
+  );
 }
 
 /** Per l'interfaccia: gli errori generali (es. login Plaud scaduto) diventano messaggi. */

@@ -23,6 +23,22 @@ export interface AppConfig {
     apiKeyPresent: boolean;
   };
   plaud: { apiBase: string; tokensPath: string; refreshUrl: string; region: string | null };
+  microsoft365: Microsoft365Config;
+}
+
+/** Collegamento a Microsoft 365 (bozze in Outlook ed eventi nel calendario). */
+export interface Microsoft365Config {
+  /** true quando tenant, id e segreto dell'applicazione sono tutti indicati. */
+  configured: boolean;
+  tenantId: string | null;
+  clientId: string | null;
+  clientSecret: string | null;
+  /** Indirizzo di ritorno registrato nell'applicazione Microsoft Entra. */
+  redirectUri: string;
+  /** File con i token di accesso (permessi 0600). */
+  tokensFile: string;
+  /** Trascrizione alla casella dello studio: bozza (predefinito) oppure invio diretto. */
+  transcriptDelivery: "bozza" | "invio";
 }
 
 function env(name: string, fallback: string): string {
@@ -48,6 +64,8 @@ export function loadConfig(): AppConfig {
   const effort = env("SEGUITO_CLAUDE_EFFORT", "high");
   const port = Number.parseInt(env("SEGUITO_PORT", "3000"), 10);
   const maxTokens = Number.parseInt(env("SEGUITO_CLAUDE_MAX_TOKENS", String(DEFAULT_MAX_TOKENS)), 10);
+  const dataDir = resolve(env("SEGUITO_DATA_DIR", "./data"));
+  const serverPort = Number.isFinite(port) ? port : 3000;
   return {
     studio: {
       studioName,
@@ -58,12 +76,12 @@ export function loadConfig(): AppConfig {
       bookingLink: envOrNull("SEGUITO_BOOKING_LINK"),
       signature: env("SEGUITO_SIGNATURE", `${lawyerName}\n${studioName}`).replace(/\\n/g, "\n"),
     },
-    dataDir: resolve(env("SEGUITO_DATA_DIR", "./data")),
+    dataDir,
     outboxDir: resolve(env("SEGUITO_OUTBOX_DIR", "./outbox")),
     caseManagementFile: resolve(env("SEGUITO_GESTIONALE_FILE", "./data/gestionale.json")),
     server: {
       host: env("SEGUITO_HOST", "127.0.0.1"),
-      port: Number.isFinite(port) ? port : 3000,
+      port: serverPort,
       password: envOrNull("SEGUITO_PASSWORD"),
       allowedHosts: env("SEGUITO_ALLOWED_HOSTS", "")
         .split(",")
@@ -85,5 +103,21 @@ export function loadConfig(): AppConfig {
       ),
       region: envOrNull("PLAUD_REGION"),
     },
+    microsoft365: microsoft365Config(dataDir, serverPort),
+  };
+}
+
+function microsoft365Config(dataDir: string, port: number): Microsoft365Config {
+  const tenantId = envOrNull("SEGUITO_M365_TENANT_ID");
+  const clientId = envOrNull("SEGUITO_M365_CLIENT_ID");
+  const clientSecret = envOrNull("SEGUITO_M365_CLIENT_SECRET");
+  return {
+    configured: tenantId !== null && clientId !== null && clientSecret !== null,
+    tenantId,
+    clientId,
+    clientSecret,
+    redirectUri: env("SEGUITO_M365_REDIRECT_URI", `http://localhost:${port}/auth/microsoft/callback`),
+    tokensFile: resolve(expandHome(env("SEGUITO_M365_TOKENS_FILE", join(dataDir, "microsoft365.json")))),
+    transcriptDelivery: env("SEGUITO_TRASCRIZIONE", "bozza").toLowerCase() === "invio" ? "invio" : "bozza",
   };
 }

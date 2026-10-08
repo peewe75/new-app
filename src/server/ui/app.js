@@ -95,6 +95,28 @@ const SEVERITY = {
 const RESULT_LABELS = { ok: "OK", errore: "Errore", saltata: "Saltata" };
 
 const ARTIFACT_LINK_LABELS = { ics: "Scarica .ics", eml: "Scarica bozza email" };
+/** Elementi creati in Microsoft 365, aperti in Outlook sul web. */
+const ARTIFACT_OPEN_LABELS = { evento_calendario: "Apri nel calendario", bozza_email: "Apri la bozza in Outlook" };
+const ARTIFACT_ICONS = {
+  gestionale: "folder",
+  evento_calendario: "appuntamento",
+  bozza_email: "email",
+  email_inviata: "email",
+};
+
+/** Esiti del collegamento a Microsoft 365 (parametro ?microsoft365= dopo l'accesso). */
+const MICROSOFT_OUTCOMES = {
+  collegato: { ok: true, text: "Microsoft 365 collegato: eventi e bozze andranno direttamente in Outlook." },
+  annullato: { ok: false, text: "Collegamento a Microsoft 365 annullato." },
+  scaduto: { ok: false, text: "Richiesta di collegamento scaduta: scegliere di nuovo «Collega Microsoft 365»." },
+  configurazione: {
+    ok: false,
+    text:
+      "Collegamento non riuscito: l'applicazione Microsoft non è configurata correttamente o mancano i permessi " +
+      "(vedere docs/microsoft365-setup.md).",
+  },
+  errore: { ok: false, text: "Collegamento a Microsoft 365 non riuscito: riprovare tra qualche minuto." },
+};
 
 const APPOINTMENT_STATUS = { fissato: "Fissato", da_fissare: "Da fissare" };
 const APPOINTMENT_MODES = {
@@ -404,7 +426,7 @@ function plural(count, singular, pluralForm) {
 // ---------------------------------------------------------------------------
 
 const state = {
-  config: { studioName: "", lawyerName: "", timezone: "Europe/Rome", syncAvailable: false },
+  config: { studioName: "", lawyerName: "", timezone: "Europe/Rome", syncAvailable: false, microsoft365: null },
   /** { proposal, transcript } della proposta aperta. */
   detail: null,
   /** Per ogni azione selezionabile: casella, campi modificabili e indicatore di modifica. */
@@ -579,8 +601,74 @@ function renderInbox(items) {
       ),
       refresh,
     ),
+    microsoftPanel(),
     items.length === 0 ? emptyInbox() : h("ul", { class: "card-list" }, items.map(proposalCard)),
   );
+}
+
+// ---------------------------------------------------------------------------
+// Microsoft 365
+// ---------------------------------------------------------------------------
+
+/** Stato del collegamento nell'elenco; null se Microsoft 365 non è configurato. */
+function microsoftPanel() {
+  const microsoft = state.config.microsoft365;
+  if (!microsoft) return null;
+  if (!microsoft.connected) return connectMicrosoftBanner("info");
+  return h(
+    "div",
+    { class: "connection" },
+    icon("success", "icon icon--sm connection__icon"),
+    h(
+      "p",
+      { class: "connection__text" },
+      "Microsoft 365 collegato",
+      microsoft.account ? h("span", { class: "connection__account", text: microsoft.account }) : null,
+    ),
+    h("button", { type: "button", class: "btn btn--link", text: "Scollega", onclick: disconnectMicrosoft }),
+  );
+}
+
+function connectMicrosoftBanner(tone) {
+  const node = banner(
+    tone,
+    tone === "info" ? "Collega Microsoft 365" : "Microsoft 365 non collegato",
+    tone === "info"
+      ? "Gli eventi e le bozze delle azioni approvate vanno direttamente nel calendario e nella posta di Outlook."
+      : "Finché l'account non è collegato, le azioni di calendario ed email non possono essere eseguite: " +
+          "restano da approvare e si eseguono dopo il collegamento.",
+  );
+  node.querySelector(".banner__body")?.append(
+    h("a", { class: "btn btn--primary banner__action", href: "/auth/microsoft" }, "Collega Microsoft 365"),
+  );
+  return node;
+}
+
+async function disconnectMicrosoft() {
+  const confirmed = window.confirm(
+    "Scollegare Microsoft 365? Eventi e bozze già creati restano in Outlook; le prossime azioni di calendario " +
+      "ed email non potranno essere eseguite finché non si ricollega l'account.",
+  );
+  if (!confirmed) return;
+  try {
+    await api("/api/microsoft365/disconnect", { method: "POST" });
+    state.config = { ...state.config, ...(await api("/api/config")) };
+    announce("Microsoft 365 scollegato.");
+    await navigate();
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+/** Dopo l'accesso Microsoft il server torna a /?microsoft365=<esito>: messaggio e indirizzo ripulito. */
+function showMicrosoftOutcome() {
+  const params = new URLSearchParams(window.location.search);
+  const outcome = MICROSOFT_OUTCOMES[params.get("microsoft365") ?? ""];
+  if (!params.has("microsoft365")) return;
+  window.history.replaceState(null, "", `${window.location.pathname}${window.location.hash}`);
+  if (!outcome) return;
+  if (outcome.ok) announce(outcome.text);
+  else showError(outcome.text);
 }
 
 function emptyInbox() {
@@ -738,6 +826,9 @@ function renderDetail() {
     backLink(),
     detailHeader(proposal),
     proposalBanners(proposal),
+    editable && state.config.microsoft365 && !state.config.microsoft365.connected
+      ? h("div", { class: "banners" }, connectMicrosoftBanner("warning"))
+      : null,
     executionsSection(proposal),
     section("sintesi", "Sintesi", h("p", { class: "prose panel", text: proposal.summary || "Sintesi non disponibile." })),
     participantsSection(proposal.participants),
@@ -1288,6 +1379,20 @@ function outboxHref(path) {
 }
 
 function artifactItem(artifact) {
+  const openLabel = ARTIFACT_OPEN_LABELS[artifact.kind];
+  if (openLabel && typeof artifact.url === "string" && artifact.url.startsWith("https://")) {
+    return h(
+      "li",
+      { class: "artifact" },
+      h(
+        "a",
+        { class: "btn btn--link", href: artifact.url, target: "_blank", rel: "noopener noreferrer" },
+        icon(ARTIFACT_ICONS[artifact.kind], "icon icon--sm"),
+        openLabel,
+      ),
+      artifact.label ? h("span", { class: "artifact__label", text: artifact.label }) : null,
+    );
+  }
   if (artifact.path) {
     return h(
       "li",
@@ -1304,7 +1409,7 @@ function artifactItem(artifact) {
   return h(
     "li",
     { class: "artifact artifact--note" },
-    icon(artifact.kind === "gestionale" ? "folder" : "check", "icon icon--sm"),
+    icon(ARTIFACT_ICONS[artifact.kind] ?? "check", "icon icon--sm"),
     h("span", { class: "artifact__label", text: artifact.label || artifact.ref || "" }),
   );
 }
@@ -1527,6 +1632,8 @@ async function start() {
     void navigate();
   });
   await navigate();
+  // Dopo il primo caricamento, che svuota le notifiche.
+  showMicrosoftOutcome();
 }
 
 void start();

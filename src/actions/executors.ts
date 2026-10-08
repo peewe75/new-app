@@ -56,7 +56,8 @@ const CLIENT_ROLES: ReadonlySet<ParticipantRole> = new Set(["cliente", "potenzia
 const DEFAULT_APPOINTMENT_MINUTES = 60;
 /** Durata delle scadenze con orario. */
 const DEFAULT_DEADLINE_MINUTES = 60;
-const APPOINTMENT_ALARMS = [1440, 60];
+/** Promemoria dal più importante: Outlook ne usa uno solo (il primo), il file .ics tutti. */
+const APPOINTMENT_ALARMS = [60, 1440];
 const DEADLINE_ALARMS = [10080, 1440];
 const NOTE_AUTHOR = "Seguito";
 

@@ -352,6 +352,7 @@ describe("server senza password", () => {
       lawyerName: STUDIO.lawyerName,
       timezone: "Europe/Rome",
       syncAvailable: false,
+      microsoft365: null,
     });
   });
 
@@ -655,6 +656,106 @@ describe("server con sincronizzazione", () => {
       expect(first.json<unknown>()).toEqual({ processed: 2, skipped: 1, errors: [] });
       expect(second.json<unknown>()).toEqual({ processed: 2, skipped: 1, errors: [] });
       expect(runs).toBe(1);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("server con Microsoft 365", () => {
+  function microsoftHarness(complete: (query: URLSearchParams) => Promise<string>) {
+    const calls = { complete: [] as string[], disconnect: 0 };
+    let connected = false;
+    const harness = createHarness(outboxDir, {
+      microsoft365: {
+        status: async () => ({ connected, account: connected ? "avvocato@studio.example" : null }),
+        authorizationUrl: () => "https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize?state=abc",
+        complete: async (query) => {
+          calls.complete.push(query.toString());
+          const account = await complete(query);
+          connected = true;
+          return account;
+        },
+        disconnect: async () => {
+          calls.disconnect += 1;
+          connected = false;
+        },
+      },
+    });
+    return { harness, calls };
+  }
+
+  it("avvia l'accesso, completa il ritorno e mostra lo stato del collegamento", async () => {
+    const { harness, calls } = microsoftHarness(async () => "avvocato@studio.example");
+    const server = await start(harness.services);
+    try {
+      const before = (await send(server.port, "GET", "/api/config")).json<{ microsoft365: unknown }>();
+      expect(before.microsoft365).toEqual({ connected: false, account: null });
+
+      const login = await send(server.port, "GET", "/auth/microsoft");
+      expect(login.status).toBe(302);
+      expect(login.headers.location).toBe("https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize?state=abc");
+      expectSecurityHeaders(login);
+
+      const back = await send(server.port, "GET", "/auth/microsoft/callback?code=CODICE&state=abc");
+      expect(back.status).toBe(302);
+      expect(back.headers.location).toBe("/?microsoft365=collegato");
+      expect(calls.complete).toEqual(["code=CODICE&state=abc"]);
+
+      const after = (await send(server.port, "GET", "/api/config")).json<{ microsoft365: unknown }>();
+      expect(after.microsoft365).toEqual({ connected: true, account: "avvocato@studio.example" });
+
+      const disconnect = await postJson(server.port, "/api/microsoft365/disconnect", {});
+      expect(disconnect.status).toBe(200);
+      expect(calls.disconnect).toBe(1);
+      expect((await send(server.port, "GET", "/api/microsoft365/disconnect")).status).toBe(405);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("comunica all'interfaccia solo un codice d'esito, mai il testo dell'errore", async () => {
+    const failure = (reason: string) => () => {
+      const error = new Error("dettaglio interno da non mostrare") as Error & { reason?: string };
+      error.name = "Microsoft365AuthError";
+      error.reason = reason;
+      return Promise.reject(error);
+    };
+    const cases: Array<[string, string]> = [
+      ["annullato", "/?microsoft365=annullato"],
+      ["scaduto", "/?microsoft365=scaduto"],
+      ["configurazione", "/?microsoft365=configurazione"],
+      ["inventato", "/?microsoft365=errore"],
+    ];
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      for (const [reason, location] of cases) {
+        const { harness } = microsoftHarness(failure(reason));
+        const server = await start(harness.services);
+        try {
+          const back = await send(server.port, "GET", "/auth/microsoft/callback?error=access_denied&state=abc");
+          expect(back.status).toBe(302);
+          expect(back.headers.location).toBe(location);
+          expect(back.text).not.toContain("dettaglio");
+        } finally {
+          await server.close();
+        }
+      }
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("risponde 404 alle rotte di Microsoft 365 quando non è configurato", async () => {
+    const server = await start(createHarness(outboxDir).services);
+    try {
+      for (const path of ["/auth/microsoft", "/auth/microsoft/callback?code=x&state=y"]) {
+        const response = await send(server.port, "GET", path);
+        expect(response.status, path).toBe(404);
+        expect(response.json().error).toMatch(/SEGUITO_M365_TENANT_ID/);
+      }
+      expect((await postJson(server.port, "/api/microsoft365/disconnect", {})).status).toBe(404);
+      expect((await send(server.port, "GET", "/auth/microsoft/altro")).status).toBe(404);
     } finally {
       await server.close();
     }

@@ -26,6 +26,10 @@ App per lo studio dell'Avv. Vincenzo Sapone (Cantù). Dopo una telefonata o una 
 | 14 | **Telefono: Android** (risposta dell'avvocato) | La PWA si installa da Chrome e può ricevere notifiche push. |
 | 15 | **Hosting: Supabase + Netlify** (scelta dell'avvocato) | Archivio su Supabase (regione UE), interfaccia PWA e funzioni su Netlify. Comporta l'adattamento dell'archivio, del polling e delle analisi lunghe ai limiti delle funzioni serverless; vanno firmati i DPA con Supabase e Netlify. |
 | 16 | **Gestionale**: risposta dell'avvocato «è vecchio e costruito nuovo» | Da chiarire (vedi domande aperte). Finché non è chiarito resta il gestionale su file JSON. |
+| 17 | **Connettore Microsoft 365 con Microsoft Graph, senza librerie aggiuntive**: accesso delegato con codice di autorizzazione e PKCE (applicazione Entra a tenant singolo, con segreto), permessi `User.Read`, `Mail.ReadWrite`, `Calendars.ReadWrite`, `offline_access` | Seguito agisce solo sulla casella e sul calendario dell'avvocato che si collega. Lo stesso flusso funziona in locale (`http://localhost`) e una volta pubblicato. Gli esecutori passano da un'interfaccia comune (`Office`): file `.ics`/`.eml` se Microsoft 365 non è configurato, Outlook se lo è. |
+| 18 | **Le email restano bozze; la trascrizione allo studio è una bozza, salvo `SEGUITO_TRASCRIZIONE=invio`** | Coerente con la decisione 10: nessun invio verso l'esterno. L'invio diretto, se scelto, è ammesso solo verso la casella dello studio (controllo nel codice) e richiede in più il permesso `Mail.Send`. |
+| 19 | **Un solo promemoria per evento in Outlook**: un'ora prima per gli appuntamenti, 7 giorni prima per le scadenze (sull'intera giornata, «Libero») | Outlook ammette un solo promemoria; per le scadenze serve il tempo di prepararsi. I file `.ics` mantengono entrambi i promemoria. Se serve anche quello del giorno prima, si può aggiungere un secondo evento. |
+| 20 | **Microsoft 365 configurato ma non collegato: le azioni di calendario ed email vanno in errore**, non ripiegano sui file | Evita che un evento finisca in un file invece che nel calendario senza che l'avvocato se ne accorga. Le azioni in errore si eseguono approvandole di nuovo dopo il collegamento. |
 
 ## Domande aperte (chiedere all'avvocato)
 
@@ -35,5 +39,5 @@ App per lo studio dell'Avv. Vincenzo Sapone (Cantù). Dopo una telefonata o una 
 
 1. Completare e verificare la prima versione (vedi `docs/specifica-tecnica.md`).
 2. Quando arriva il Plaud: configurare il template, fare il login CLI, eseguire `npm run poll` su chiamate vere e confrontare le estrazioni.
-3. Collegamenti: Google Calendar e Gmail oppure Microsoft Graph; adattatore per il gestionale reale.
+3. Collegamento Microsoft 365: fatto (vedi `docs/microsoft365-setup.md`); resta da registrare l'applicazione nel tenant dello studio. Adattatore per il gestionale reale, dopo il chiarimento sulla decisione 16.
 4. Pubblicazione come PWA protetta da password, con accesso dal telefono.

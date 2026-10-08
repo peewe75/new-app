@@ -16,6 +16,7 @@ import type { CaseManagement } from "../enrich/case-management.js";
 import type { ActionExecutor, ExecutionContext } from "./executor.js";
 import { defaultExecutors } from "./executors.js";
 import { ACTION_LABELS } from "./format.js";
+import { ConnectorError } from "./office.js";
 
 /** La proposta non è nello stato richiesto dall'operazione. */
 export class ProposalStateError extends Error {
@@ -240,6 +241,8 @@ async function runAction(
 
 /** Messaggio in italiano per l'avvocato, senza dettagli tecnici. */
 function userMessage(err: unknown): string {
+  // I servizi collegati (es. Microsoft 365) preparano già un messaggio per l'avvocato.
+  if (err instanceof ConnectorError && err.message.trim() !== "") return err.message;
   if (typeof err === "object" && err !== null && "code" in err && typeof err.code === "string") {
     const reason = SYSTEM_ERRORS[err.code] ?? `codice ${err.code}`;
     return `Errore di sistema durante l'esecuzione: ${reason}.`;

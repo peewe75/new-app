@@ -70,6 +70,15 @@ Le istruzioni passo passo, dall'app Plaud alla creazione del template di riassun
 
 Le registrazioni ancora senza trascrizione vengono ignorate e riprovate al controllo successivo. Ogni registrazione viene analizzata una volta sola, anche se `poll` e `serve` sono in funzione insieme: una proposta già creata non viene mai sovrascritta. Se l'analisi non riesce per un errore transitorio (per esempio il servizio non risponde), viene ritentata con attese crescenti, da 15 minuti fino a un giorno. Se invece ripeterla darebbe lo stesso esito (registrazione troppo lunga per il limite di token, rifiuto del modello, risposta non conforme), non viene ritentata in automatico: rimossa la causa, la si ripete con `npm run poll -- --retry-failed`.
 
+## Con Microsoft 365
+
+Se lo studio usa Outlook, Seguito crea gli eventi direttamente nel calendario e le bozze direttamente nella cartella Bozze, invece dei file `.ics` ed `.eml`. Le email a clienti, colleghi e controparti restano sempre bozze da controllare e inviare.
+
+1. Registra Seguito come applicazione nel tenant dello studio e inserisci in `.env` i tre valori `SEGUITO_M365_*`: i passaggi sono in [docs/microsoft365-setup.md](docs/microsoft365-setup.md).
+2. Avvia `npm run serve`, apri <http://localhost:3000> e premi **Collega Microsoft 365**.
+
+Finché l'account non è collegato, le azioni di calendario ed email restano in errore e si eseguono approvandole di nuovo dopo il collegamento; le note nel gestionale procedono comunque.
+
 ## Trascrizioni esportate
 
 Per analizzare trascrizioni già scaricate, indica un file o una cartella:
@@ -113,6 +122,12 @@ Copia `.env.example` in `.env` e completa i valori. Il file `.env` contiene la c
 | `SEGUITO_DATA_DIR` | `./data` | Registrazioni, proposte ed esiti. |
 | `SEGUITO_OUTBOX_DIR` | `./outbox` | File generati: eventi `.ics` e bozze `.eml`. |
 | `SEGUITO_GESTIONALE_FILE` | `./data/gestionale.json` | Gestionale su file JSON, usato finché non c'è il collegamento al gestionale dello studio. |
+| `SEGUITO_M365_TENANT_ID` | vuoto | ID della directory (tenant) Microsoft 365 dello studio. |
+| `SEGUITO_M365_CLIENT_ID` | vuoto | ID dell'applicazione registrata in Microsoft Entra. |
+| `SEGUITO_M365_CLIENT_SECRET` | vuoto | Segreto dell'applicazione. Con questi tre valori eventi e bozze vanno in Outlook; senza, Seguito produce file `.ics` ed `.eml`. |
+| `SEGUITO_M365_REDIRECT_URI` | `http://localhost:<porta>/auth/microsoft/callback` | Indirizzo di ritorno dopo l'accesso Microsoft: deve coincidere con quello registrato. |
+| `SEGUITO_M365_TOKENS_FILE` | `./data/microsoft365.json` | Token dell'account collegato (file leggibile solo dall'utente che esegue Seguito). |
+| `SEGUITO_TRASCRIZIONE` | `bozza` | Con `invio` la trascrizione è inviata direttamente alla casella dello studio (solo a quella e solo con Microsoft 365); altrimenti resta una bozza. |
 
 Per usi particolari esistono anche `PLAUD_API_BASE` e `PLAUD_REFRESH_URL`, che di norma non vanno toccate.
 
@@ -129,7 +144,7 @@ Nell'interfaccia ogni azione ha una casella. Sono già spuntate le azioni con af
 | Incarico, accordo economico, documenti, attività | Nota nella pratica del gestionale. Se serve, Seguito crea il nuovo cliente e la nuova pratica. |
 | Invio della trascrizione | Bozza `.eml` alla casella dello studio, con sintesi, azioni e trascrizione completa (anche in allegato `.txt`). |
 
-I file si trovano in `outbox/`, in una cartella per ogni registrazione, e si scaricano dai link che compaiono dopo l'approvazione:
+Con Microsoft 365 collegato, eventi e bozze sono creati direttamente in Outlook e dopo l'approvazione compaiono i link **Apri nel calendario** e **Apri la bozza in Outlook** (dettagli in [docs/microsoft365-setup.md](docs/microsoft365-setup.md)). Senza Microsoft 365, i file si trovano in `outbox/`, in una cartella per ogni registrazione, e si scaricano dai link che compaiono dopo l'approvazione:
 
 - **`.ics`**: con un doppio clic si apre in Calendario di Apple o in Outlook. In Google Calendar si importa da *Impostazioni → Importa ed esporta → Importa*.
 - **`.eml`**: è una bozza, **non viene inviata**. In Outlook si apre come messaggio da completare e inviare. In Apple Mail, se si apre in sola lettura, usa *Messaggio → Invia di nuovo*. In Thunderbird, *Modifica come nuovo messaggio*. Gmail sul web non apre i file `.eml` come bozze: il collegamento diretto a Gmail è previsto nella roadmap.
@@ -139,7 +154,7 @@ Le azioni non spuntate non vengono eseguite, ma restano nella proposta: si posso
 
 ## Sicurezza e deontologia
 
-- **Nulla parte senza approvazione.** Seguito non invia email e non modifica calendari esterni: produce file e note che l'avvocato controlla.
+- **Nulla parte senza approvazione.** Seguito non invia email a clienti, colleghi o controparti: crea bozze (file `.eml` o bozze in Outlook) che l'avvocato controlla e invia. Gli eventi in calendario e le note nel gestionale si creano solo per le azioni spuntate. L'unico invio possibile è quello della trascrizione alla casella dello studio, e solo se lo si sceglie (`SEGUITO_TRASCRIZIONE=invio`).
 - **Telefonate con i colleghi.** L'art. 38, comma 2, del Codice deontologico forense vieta di registrare una conversazione telefonica con un collega e consente la registrazione di una riunione solo con il consenso di tutti i presenti. Se tra i partecipanti c'è un altro avvocato, Seguito mostra un avviso bloccante e non preseleziona nessuna azione. Il collega collegato al telefono o in vivavoce durante una riunione, e la videochiamata a due, sono trattati come telefonate.
 - **Termini processuali.** Sono sempre segnalati come «da verificare» sul fascicolo e sul codice, anche nel titolo dell'evento in calendario. Il prompt distingue le regole di computo del processo civile (art. 155 c.p.c., proroga anche di sabato) e di quello penale (art. 172 c.p.p., il sabato non proroga), e non fa calcolare termini la cui durata non è stata detta.
 - **Conflitto di interessi e controparte assistita.** Una controparte che risulta cliente dello studio produce l'avviso «Possibile conflitto di interessi» (art. 24 CDF); le email dirette alla controparte ricordano l'art. 41 CDF. In entrambi i casi l'azione non è preselezionata.
@@ -159,7 +174,8 @@ src/
   sources/     fonti delle registrazioni: API Plaud e file locali
   extract/     analisi con Claude (prompt e chiamata), analisi di esempio, costruzione della proposta
   enrich/      collegamento al gestionale (interfaccia e versione su file JSON)
-  actions/     esecuzione delle azioni approvate: .ics, .eml, note nel gestionale
+  actions/     esecuzione delle azioni approvate: eventi, bozze (file o servizio collegato), note nel gestionale
+  connectors/  servizi collegati: Microsoft 365 (accesso, Microsoft Graph, calendario e bozze)
   store/       archivio locale di registrazioni e proposte
   server/      server HTTP e interfaccia web di approvazione (ui/)
   pipeline.ts  dalla registrazione alla proposta, sincronizzazione con la fonte
@@ -182,7 +198,7 @@ Il comando esegue il controllo dei tipi TypeScript e tutti i test. I test non ri
 
 ## Roadmap
 
-- **Google Workspace e Microsoft 365**: eventi creati direttamente in Google Calendar o Outlook e bozze direttamente in Gmail o Outlook, invece dei file `.ics` ed `.eml`.
+- **Google Workspace**: eventi in Google Calendar e bozze in Gmail (Microsoft 365 è già disponibile).
 - **Gestionale dello studio**: un adattatore per il gestionale reale al posto del file JSON.
 - **Supabase**: archivio e accesso condivisi, per lavorare da più dispositivi.
 - **Hosting e PWA**: Seguito su un server europeo, installabile sul telefono e protetto da password.

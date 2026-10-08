@@ -4,6 +4,7 @@
  * proposte archiviate. Nessuna azione viene eseguita senza approvazione.
  */
 import { z } from "zod";
+import type { ActionExecutor } from "./actions/executor.js";
 import { approveProposal, discardProposal, ProposalStateError } from "./actions/run.js";
 import { formatItalianDateTime } from "./domain/time.js";
 import type { ApprovalRequest, Proposal, Recording, RecordingRef, StudioProfile } from "./domain/types.js";
@@ -66,6 +67,8 @@ export interface StoredProposalDeps {
   studio: StudioProfile;
   /** Cartella dei file generati (.ics, .eml). */
   outboxDir: string;
+  /** Esecutori delle azioni (predefiniti: file nell'outbox e gestionale). */
+  executors?: ActionExecutor[];
 }
 
 /**
@@ -215,6 +218,7 @@ export async function approveStoredProposal(
     outboxDir: deps.outboxDir,
     caseManagement: deps.caseManagement,
     now,
+    ...(deps.executors === undefined ? {} : { executors: deps.executors }),
   });
   await deps.store.saveProposal(updated);
   return updated;
