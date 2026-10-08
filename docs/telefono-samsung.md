@@ -1,6 +1,6 @@
-# Seguito sul Samsung Galaxy S25: le chiamate registrate dal telefono
+# Seguito sul Samsung Galaxy S25: chiamate e riunioni registrate con il telefono
 
-L'app **Seguito** per Android manda a Seguito le chiamate registrate con la funzione nativa del telefono Samsung, senza passare da Plaud. Seguito le trascrive, le fa analizzare a Claude e propone le azioni da approvare, esattamente come per le registrazioni del Plaud.
+L'app **Seguito** per Android manda a Seguito le chiamate registrate con la funzione nativa del telefono Samsung e le registrazioni del **Registratore vocale** (riunioni con clienti e con il team, appunti), senza passare da Plaud. Seguito le trascrive, le fa analizzare a Claude e propone le azioni da approvare, esattamente come per le registrazioni del Plaud.
 
 ```
 Telefono Samsung        App Seguito (S25)          Seguito (computer dello studio)
@@ -9,7 +9,7 @@ registra la chiamata ─► trova il file e chiede ─► trascrizione ─► an
                                     ◄──────── notifica «Proposta pronta» ─────────┘
 ```
 
-L'app legge soltanto le chiamate registrate (la cartella *Call*, mai le note vocali del Registratore vocale) e non modifica né cancella le registrazioni. Sul server l'audio viene cancellato appena la trascrizione è archiviata: resta solo il testo.
+L'app legge soltanto due cartelle: *Recordings/Call* (chiamate) e *Recordings/Voice Recorder* (Registratore vocale). Non modifica né cancella le registrazioni. Sul server l'audio viene cancellato appena la trascrizione è archiviata: resta solo il testo.
 
 ## Cosa serve
 
@@ -54,7 +54,7 @@ Con HTTP l'app accetta solo indirizzi della rete dello studio o di Tailscale: su
 ## Configurare l'app
 
 1. **Collegamento a Seguito**: indirizzo e password (`SEGUITO_PASSWORD`), poi **Salva e verifica**. Il messaggio «pronto a ricevere le registrazioni» conferma che il server ha trascrizione e analisi attive.
-2. **Cartella delle registrazioni**: **Scegli la cartella**, poi **Recordings** (o **Recordings/Call**) nella memoria interna, e **Usa questa cartella**. L'app legge solo la sottocartella *Call*: le note vocali e le riunioni registrate con il Registratore vocale non vengono mai lette. Se la cartella *Call* non c'è ancora, fai prima una chiamata di prova registrata. Le registrazioni già presenti non vengono inviate: compaiono nell'elenco e, se serve, si inviano a mano.
+2. **Cartella delle registrazioni**: **Scegli la cartella**, poi **Recordings** nella memoria interna, e **Usa questa cartella**. Da lì l'app legge *Call* e *Voice Recorder*. Se scegli solo *Recordings/Call*, le registrazioni vocali non sono raggiungibili e l'app lo segnala. Se le cartelle non ci sono ancora, fai prima una chiamata registrata e una registrazione di prova. Le registrazioni già presenti non vengono inviate: compaiono nell'elenco e, se serve, si inviano a mano.
 3. **Invio**:
    - **Chiedi conferma per ogni chiamata** (consigliato): dopo ogni chiamata registrata arriva una notifica con **Invia a Seguito** e **Non inviare**;
    - **Invia in automatico**: le registrazioni partono da sole.
@@ -64,13 +64,29 @@ Con HTTP l'app accetta solo indirizzi della rete dello studio o di Tailscale: su
    - Con il telefono bloccato, **Invia a Seguito** nella notifica chiede prima lo sblocco.
 4. **Permessi**: consenti le notifiche. Il permesso **Rileva la fine delle chiamate** è facoltativo: con quello l'app cerca la registrazione appena finisce la chiamata; senza, controlla ogni 15 minuti e quando la apri.
 
-Il Samsung può limitare le app in background per risparmiare batteria. Se le notifiche arrivano in ritardo: **Impostazioni → Batteria → Limiti di utilizzo in background** e togli Seguito dalle app in sospensione, oppure, nelle informazioni dell'app, **Batteria → Senza restrizioni**.
+Il Samsung può limitare le app in background per risparmiare batteria. Per avere la notifica appena salvi una registrazione, nelle informazioni dell'app imposta **Batteria → Senza restrizioni** e, in **Impostazioni → Batteria → Limiti di utilizzo in background**, aggiungi Seguito alle **App mai in sospensione**. Senza queste impostazioni le notifiche possono arrivare in ritardo: l'app controlla comunque ogni 15 minuti e ogni volta che la apri.
 
 ## Uso quotidiano
+
+**Chiamate**
 
 1. Durante la chiamata tocca **Registra** nell'app Telefono.
 2. A fine chiamata arriva la notifica: **Invia a Seguito**.
 3. Dopo qualche minuto, il tempo di trascrizione e analisi, arriva **Proposta pronta**: toccala per aprire la proposta in Seguito, controllarla e approvare le azioni.
+
+**Riunioni e appunti (Registratore vocale)**
+
+1. Registra con il **Registratore vocale** del Samsung e, alla fine, tocca **Salva**. Nel nome puoi già scrivere di che cosa si tratta, per esempio «Riunione Rossi».
+2. Arriva la notifica **Registrazione vocale**. Toccandola si apre l'app: puoi aggiungere un titolo, per esempio «Riunione con il cliente Rossi» o «Riunione di team», poi **Invia a Seguito**. Il titolo aiuta l'analisi e ritrovi la proposta più facilmente.
+3. Come per le chiamate, arriva **Proposta pronta**.
+
+Le registrazioni vocali chiedono sempre conferma, anche con **Invia in automatico**: dal nome del file non si capisce chi è presente e se la registrazione è di lavoro. L'interruttore **Registrazioni vocali** nella sezione **Invio** le attiva o le disattiva. Quando lo attivi, le registrazioni vocali già presenti non vengono proposte. L'elenco **Non inviare mai** vale anche per loro: i nomi si cercano nel nome del file e nel titolo.
+
+Per le riunioni lunghe:
+
+- l'invio è più rapido sulla rete Wi-Fi dello studio: un'ora di registrazione occupa circa 55 MB;
+- Android interrompe un invio che dura più di 10 minuti. Con una rete mobile lenta l'app riprova da sola, ma conviene inviare dal Wi-Fi;
+- il Registratore vocale del Samsung può fermarsi dopo circa 3 ore: per riunioni più lunghe avvia una seconda registrazione.
 
 Nell'app, l'elenco **Registrazioni** mostra lo stato di ogni chiamata: da confermare, inviata, proposta pronta, esclusa o in errore, con **Riprova** dove serve.
 
@@ -143,6 +159,7 @@ Dal 2027 Android chiederà che anche le app installate fuori dal Play Store veng
 | «Per ricevere le registrazioni dal telefono impostare SEGUITO_PASSWORD» | Imposta la password nel file `.env` e riavvia Seguito. |
 | «Richiesta rifiutata: nome host non autorizzato» | Aggiungi il nome usato nell'indirizzo a `SEGUITO_ALLOWED_HOSTS`, oppure usa l'indirizzo IP. |
 | «la ricezione dal telefono non è attiva» | Sul computer mancano la chiave di Claude o il servizio di trascrizione. |
+| Nessuna notifica dopo una registrazione vocale | Interruttore **Registrazioni vocali** attivo, cartella **Recordings** (non solo *Call*), batteria **Senza restrizioni**. **Controlla ora** forza la ricerca. |
 | Nessuna notifica dopo la chiamata | Controlla di aver toccato **Registra** durante la chiamata, il permesso delle notifiche e le limitazioni della batteria. **Controlla ora** forza la ricerca. |
 | «Il permesso sulla cartella non è più valido» | Scegli di nuovo la cartella nell'app. |
 | «Chiave di Speechmatics non valida» | Controlla `SPEECHMATICS_API_KEY` nel file `.env`, riavvia Seguito e tocca **Riprova**. |

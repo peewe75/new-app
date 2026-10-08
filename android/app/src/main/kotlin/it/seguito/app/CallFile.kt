@@ -16,6 +16,9 @@ data class CallFileInfo(
         get() = contact ?: phoneNumber ?: "Numero sconosciuto"
 }
 
+/** chiamata: app Telefono (Recordings/Call); vocale: Registratore vocale (Recordings/Voice Recorder), per esempio riunioni. */
+enum class RecKind { CHIAMATA, VOCALE }
+
 object CallFile {
     private val prefixes = listOf(
         "registrazione delle chiamate",
@@ -31,14 +34,40 @@ object CallFile {
     private val phone = Regex("""^\+?[\d\s().-]{6,}$""")
     private val audioExtensions = setOf("m4a", "mp3", "amr", "3gp", "aac", "wav", "ogg", "opus", "mp4")
 
-    private val callFolder = Regex("""^call(\s*recordings?)?$""", RegexOption.IGNORE_CASE)
+    private val callFolder = Regex("""^calls?(\s*recordings?)?$""", RegexOption.IGNORE_CASE)
+    private val voiceFolder = Regex("""^(voice\s*recorder|voice\s*recordings?|registratore(\s*vocale)?)$""", RegexOption.IGNORE_CASE)
+
+    /** Nomi predefiniti del Registratore vocale, che non dicono nulla del contenuto (es. "Voce 260822_181740"). */
+    private val genericVoiceName = Regex(
+        """^(voce|voice|registrazione( vocale)?|nota vocale|nota|memo( vocale)?|recording|rec|audio|interview|intervista)?[ _-]*[\d _-]*$""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /** Cartella delle chiamate registrate: sul Samsung «Recordings/Call». */
+    fun isCallFolder(name: String): Boolean = callFolder.matches(name.trim())
+
+    /** Cartella del Registratore vocale: sul Samsung «Recordings/Voice Recorder» (nome non tradotto). */
+    fun isVoiceFolder(name: String): Boolean = voiceFolder.matches(name.trim())
+
+    /** Tipo di registrazione secondo la cartella, oppure null per le cartelle da non leggere. */
+    fun folderKind(name: String): RecKind? = when {
+        isCallFolder(name) -> RecKind.CHIAMATA
+        isVoiceFolder(name) -> RecKind.VOCALE
+        else -> null
+    }
 
     /**
-     * Cartella delle chiamate registrate: sul Samsung «Recordings/Call». Le altre
-     * cartelle di Recordings (per esempio «Voice Recorder», note vocali e
-     * riunioni registrate) non si leggono mai.
+     * File e cartelle nascosti (nome che inizia con il punto): registrazioni in corso,
+     * file in attesa (".pending-…") o nel cestino (".trashed-…"). Non si leggono mai.
      */
-    fun isCallFolder(name: String): Boolean = callFolder.matches(name.trim())
+    fun isHidden(name: String): Boolean = name.startsWith(".")
+
+    /** Nome da mostrare per una registrazione vocale: il titolo scelto, il nome del file se dice qualcosa, oppure un testo generico. */
+    fun voiceLabel(fileName: String, title: String?): String {
+        title?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        val base = fileName.substringAfterLast('/').replace(Regex("""\.[A-Za-z0-9]{1,5}$"""), "").replace('_', ' ').trim()
+        return if (base.isEmpty() || genericVoiceName.matches(base)) "Registrazione vocale" else base
+    }
 
     fun isAudio(fileName: String): Boolean =
         fileName.substringAfterLast('.', "").lowercase() in audioExtensions

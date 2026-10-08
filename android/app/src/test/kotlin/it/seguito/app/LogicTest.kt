@@ -39,11 +39,54 @@ class CallFileTest {
     }
 
     @Test
-    fun leggeSoloLaCartellaDelleChiamate() {
+    fun riconosceLeCartelleDiChiamateERegistrazioniVocali() {
         assertTrue(CallFile.isCallFolder("Call"))
         assertTrue(CallFile.isCallFolder("call recordings"))
         assertFalse(CallFile.isCallFolder("Voice Recorder"))
         assertFalse(CallFile.isCallFolder("Recordings"))
+        assertEquals(RecKind.CHIAMATA, CallFile.folderKind("Call"))
+        assertEquals(RecKind.VOCALE, CallFile.folderKind("Voice Recorder"))
+        assertNull(CallFile.folderKind("Recordings"))
+        assertNull(CallFile.folderKind("WhatsApp Audio"))
+        assertTrue(CallFile.isHidden(".393857"))
+        assertTrue(CallFile.isHidden(".pending-1760000000-Voce 001.m4a"))
+        assertFalse(CallFile.isHidden("Voce 260822_181740.m4a"))
+    }
+
+    @Test
+    fun titolaLeRegistrazioniVocali() {
+        assertEquals("Registrazione vocale", CallFile.voiceLabel("Voce 260822_181740.m4a", null))
+        assertEquals("Registrazione vocale", CallFile.voiceLabel("Voice 001.m4a", " "))
+        assertEquals("Riunione team", CallFile.voiceLabel("Riunione team.m4a", null))
+        assertEquals("Riunione con Rossi", CallFile.voiceLabel("Voce 001.m4a", "Riunione con Rossi"))
+    }
+}
+
+class Mp4Test {
+    private fun box(type: String, payload: Int): ByteArray {
+        val size = 8 + payload
+        return byteArrayOf((size ushr 24).toByte(), (size ushr 16).toByte(), (size ushr 8).toByte(), size.toByte()) +
+            type.toByteArray(Charsets.ISO_8859_1) + ByteArray(payload)
+    }
+
+    private fun complete(bytes: ByteArray) = Mp4.isComplete(bytes.size.toLong()) { pos, buffer ->
+        val n = minOf(buffer.size, bytes.size - pos.toInt())
+        System.arraycopy(bytes, pos.toInt(), buffer, 0, n)
+        n
+    }
+
+    @Test
+    fun riconosceUnFileSalvatoDaUnoInScrittura() {
+        val saved = box("ftyp", 16) + box("mdat", 100) + box("moov", 40)
+        assertTrue(complete(saved))
+        // In scrittura: nessun indice, oppure blocco audio «fino alla fine» (dimensione 0) o più lungo del file.
+        assertFalse(complete(box("ftyp", 16) + box("mdat", 100)))
+        val open = box("ftyp", 16) + byteArrayOf(0, 0, 0, 0) + "mdat".toByteArray() + ByteArray(50)
+        assertFalse(complete(open))
+        val truncated = box("ftyp", 16) + box("mdat", 100).copyOf(60)
+        assertFalse(complete(truncated))
+        assertTrue(Mp4.applies("Voce 001.m4a"))
+        assertFalse(Mp4.applies("nota.amr"))
     }
 }
 
@@ -68,6 +111,14 @@ class ExclusionsTest {
         assertEquals(Exclusions.Reason.ELENCO, Exclusions.reason(info(null, "3331234567"), true, rules))
         assertEquals(Exclusions.Reason.ELENCO, Exclusions.reason(info(null, "+393331234567"), true, rules))
         assertNull(Exclusions.reason(info(null, "+393339999999"), true, rules))
+    }
+
+    @Test
+    fun registrazioniVocaliSoloConINomiDellElenco() {
+        val rules = Exclusions.parseRules("Bianchi\n+39 333 123 4567")
+        assertEquals(Exclusions.Reason.ELENCO, Exclusions.voiceReason("Riunione Bianchi.m4a", null, rules))
+        assertEquals(Exclusions.Reason.ELENCO, Exclusions.voiceReason("Voce 001.m4a", "Incontro con Bianchi", rules))
+        assertNull(Exclusions.voiceReason("Voce 260822_181740.m4a", null, rules))
     }
 
     @Test

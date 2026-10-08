@@ -47,6 +47,16 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean(KEY_BASELINE, false)
         set(value) = prefs.edit().putBoolean(KEY_BASELINE, value).apply()
 
+    /** Registrazioni del Registratore vocale (riunioni con clienti e team): proposte sempre con conferma. */
+    var voiceEnabled: Boolean
+        get() = prefs.getBoolean(KEY_VOICE, true)
+        set(value) = prefs.edit().putBoolean(KEY_VOICE, value).apply()
+
+    /** Come baselineDone, per le registrazioni vocali (attivate anche dopo la prima lettura della cartella). */
+    var voiceBaselineDone: Boolean
+        get() = prefs.getBoolean(KEY_VOICE_BASELINE, false)
+        set(value) = prefs.edit().putBoolean(KEY_VOICE_BASELINE, value).apply()
+
     var lastCallState: String
         get() = prefs.getString(KEY_CALL_STATE, "") ?: ""
         set(value) = prefs.edit().putString(KEY_CALL_STATE, value).apply()
@@ -67,6 +77,8 @@ class AppSettings(context: Context) {
         const val KEY_RULES = "exclusionRules"
         const val KEY_BASELINE = "baselineDone"
         const val KEY_CALL_STATE = "lastCallState"
+        const val KEY_VOICE = "voiceEnabled"
+        const val KEY_VOICE_BASELINE = "voiceBaselineDone"
     }
 }
 

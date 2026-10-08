@@ -32,6 +32,17 @@ object Exclusions {
         return null
     }
 
+    /**
+     * Registrazioni vocali: non c'è un interlocutore nel nome del file, quindi
+     * valgono solo i nomi dell'elenco «Non inviare mai», cercati nel nome del
+     * file e nel titolo scelto.
+     */
+    fun voiceReason(fileName: String, title: String?, rules: List<String>): Reason? {
+        val text = (fileName.substringAfterLast('/') + " " + (title ?: "")).lowercase()
+        val names = rules.map { it.trim() }.filter { it.isNotEmpty() && it.any(Char::isLetter) }
+        return if (names.any { text.contains(it.lowercase()) }) Reason.ELENCO else null
+    }
+
     /** Spiegazione mostrata nell'elenco delle registrazioni. */
     fun message(reason: Reason): String = when (reason) {
         Reason.COLLEGA ->

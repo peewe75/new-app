@@ -47,16 +47,36 @@ class SeguitoClient(private val baseUrl: String, private val password: String) {
         }
     }
 
+    /** Dati della registrazione inviati con l'audio. */
+    data class UploadMeta(
+        val size: Long,
+        val fileName: String,
+        val lastModified: Long,
+        val durationMs: Long?,
+        val mimeType: String,
+        /** Registrazione del Registratore vocale (riunione, appunto) invece di una chiamata. */
+        val voice: Boolean = false,
+        /** Titolo scelto dall'avvocato, per le registrazioni vocali. */
+        val title: String? = null,
+    )
+
     @Throws(IOException::class)
-    fun upload(input: InputStream, size: Long, fileName: String, lastModified: Long, durationMs: Long?, mimeType: String): Response {
-        val query = "nome=${URLEncoder.encode(fileName, "UTF-8")}&modificato=$lastModified" +
-            (if (durationMs != null && durationMs > 0) "&durata=$durationMs" else "")
+    fun upload(input: InputStream, meta: UploadMeta): Response {
+        val query = buildString {
+            append("nome=").append(URLEncoder.encode(meta.fileName, "UTF-8"))
+            append("&modificato=").append(meta.lastModified)
+            if (meta.durationMs != null && meta.durationMs > 0) append("&durata=").append(meta.durationMs)
+            if (meta.voice) {
+                append("&tipo=vocale")
+                meta.title?.trim()?.takeIf { it.isNotEmpty() }?.let { append("&titolo=").append(URLEncoder.encode(it, "UTF-8")) }
+            }
+        }
         val connection = open("POST", "/api/telefono/registrazioni?$query")
         try {
             connection.doOutput = true
             connection.readTimeout = 5 * 60_000
-            connection.setRequestProperty("Content-Type", mimeType)
-            if (size >= 0) connection.setFixedLengthStreamingMode(size) else connection.setChunkedStreamingMode(64 * 1024)
+            connection.setRequestProperty("Content-Type", meta.mimeType)
+            if (meta.size >= 0) connection.setFixedLengthStreamingMode(meta.size) else connection.setChunkedStreamingMode(64 * 1024)
             connection.outputStream.use { out -> input.copyTo(out, 64 * 1024) }
             return read(connection)
         } finally {

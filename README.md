@@ -79,9 +79,9 @@ Se lo studio usa Outlook, Seguito crea gli eventi direttamente nel calendario e 
 
 Finché l'account non è collegato, le azioni di calendario ed email restano in errore e si eseguono approvandole di nuovo dopo il collegamento; le note nel gestionale procedono comunque.
 
-## Con le chiamate registrate dal telefono
+## Con le chiamate e le riunioni registrate dal telefono
 
-Sul Samsung Galaxy S25 l'app **Seguito per Android** trova le chiamate registrate con la funzione nativa del telefono e, dopo la tua conferma, le invia a Seguito senza passare da Plaud. Seguito le trascrive con Speechmatics (server nell'UE), le analizza con Claude e propone le azioni da approvare, come per il Plaud. Le chiamate con i colleghi non partono: i contatti salvati come «Avv.», «Avvocato» o «Studio legale» sono sempre esclusi.
+Sul Samsung Galaxy S25 l'app **Seguito per Android** trova le chiamate registrate con la funzione nativa del telefono e le registrazioni del Registratore vocale (riunioni con clienti e team) e, dopo la tua conferma, le invia a Seguito senza passare da Plaud. Seguito le trascrive con Speechmatics (server nell'UE), le analizza con Claude e propone le azioni da approvare, come per il Plaud. Le chiamate con i colleghi non partono: i contatti salvati come «Avv.», «Avvocato» o «Studio legale» sono sempre esclusi.
 
 1. In `.env`: `SPEECHMATICS_API_KEY` (account e chiave sul [Portale di Speechmatics](https://portal.speechmatics.com)), `SEGUITO_PASSWORD` e `SEGUITO_HOST=0.0.0.0`; poi `npm run serve`.
 2. Sul telefono installa l'app da <https://github.com/peewe75/new-app/releases/download/app-android/Seguito.apk> e indica indirizzo del computer, password e cartella **Recordings**.

@@ -32,8 +32,15 @@ data class RecEntry(
     val message: String? = null,
     /** Invio confermato dall'avvocato nonostante l'esclusione («Invia comunque»). */
     val forced: Boolean = false,
+    val kind: RecKind = RecKind.CHIAMATA,
+    /** Titolo scelto dall'avvocato (registrazioni vocali), inviato a Seguito. */
+    val title: String? = null,
 ) {
     val info: CallFileInfo get() = CallFile.parse(name)
+
+    /** Nome da mostrare: contatto o numero per le chiamate, titolo o nome del file per le registrazioni vocali. */
+    val label: String
+        get() = if (kind == RecKind.VOCALE) CallFile.voiceLabel(name, title) else info.label
 }
 
 /**
@@ -69,13 +76,19 @@ object RecordingStore {
 
     fun get(docId: String): RecEntry? = state.value.firstOrNull { it.docId == docId }
 
-    /** true se la registrazione è già stata vista, anche se non è più nell'elenco. */
-    fun isKnown(docId: String): Boolean = synchronized(lock) { docId in seen }
+    /**
+     * true se la registrazione è già stata vista, anche se non è più nell'elenco o è
+     * stata rinominata (nuovo docId, stessi dimensione e data del file).
+     */
+    fun isKnown(docId: String, size: Long, lastModified: Long): Boolean =
+        synchronized(lock) { docId in seen || fingerprint(size, lastModified) in seen }
 
     fun all(): List<RecEntry> = state.value
 
     fun put(entry: RecEntry) = synchronized(lock) {
-        if (seen.add(entry.docId)) {
+        val addedId = seen.add(entry.docId)
+        val addedFingerprint = entry.size > 0 && seen.add(fingerprint(entry.size, entry.lastModified))
+        if (addedId || addedFingerprint) {
             while (seen.size > MAX_SEEN) seen.remove(seen.first())
             saveSeen()
         }
@@ -99,6 +112,8 @@ object RecordingStore {
         sorted.forEach { array.put(toJson(it)) }
         writeAtomic(f, array.toString())
     }
+
+    private fun fingerprint(size: Long, lastModified: Long) = "#$size:$lastModified"
 
     private fun saveSeen() {
         val f = seenFile ?: return
@@ -136,6 +151,8 @@ object RecordingStore {
         .put("proposalId", e.proposalId ?: JSONObject.NULL)
         .put("message", e.message ?: JSONObject.NULL)
         .put("forced", e.forced)
+        .put("kind", e.kind.name)
+        .put("title", e.title ?: JSONObject.NULL)
 
     private fun fromJson(o: JSONObject): RecEntry? = runCatching {
         RecEntry(
@@ -149,6 +166,8 @@ object RecordingStore {
             proposalId = o.optStringOrNull("proposalId"),
             message = o.optStringOrNull("message"),
             forced = o.optBoolean("forced", false),
+            kind = runCatching { RecKind.valueOf(o.optString("kind", RecKind.CHIAMATA.name)) }.getOrDefault(RecKind.CHIAMATA),
+            title = o.optStringOrNull("title"),
         )
     }.getOrNull()
 

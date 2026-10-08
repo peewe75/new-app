@@ -12,6 +12,7 @@ class SeguitoApp : Application() {
         RecordingStore.init(this)
         Notifications.createChannels(this)
         Jobs.schedulePeriodic(this)
+        Jobs.armMediaTrigger(this)
     }
 }
 

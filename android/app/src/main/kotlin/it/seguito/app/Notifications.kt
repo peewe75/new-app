@@ -38,13 +38,21 @@ object Notifications {
     fun askToSend(context: Context, entry: RecEntry) {
         val send = actionIntent(context, NotificationActionReceiver.ACTION_SEND, entry.docId)
         val skip = actionIntent(context, NotificationActionReceiver.ACTION_SKIP, entry.docId)
+        val voice = entry.kind == RecKind.VOCALE
         val builder = base(context, CHANNEL_NEW)
-            .setContentTitle("Chiamata registrata: ${entry.info.label}")
-            .setContentText("Inviarla a Seguito per la trascrizione e la proposta di azioni?")
+            .setContentTitle(if (voice) "Registrazione vocale: ${entry.label}" else "Chiamata registrata: ${entry.label}")
+            .setContentText(
+                if (voice) {
+                    "Inviarla a Seguito? Tocca per aggiungere un titolo, per esempio «Riunione con il cliente Rossi»."
+                } else {
+                    "Inviarla a Seguito per la trascrizione e la proposta di azioni?"
+                },
+            )
             // Con il telefono bloccato l'invio chiede prima lo sblocco.
             .addAction(NotificationCompat.Action.Builder(0, "Invia a Seguito", send).setAuthenticationRequired(true).build())
             .addAction(0, "Non inviare", skip)
-            .setContentIntent(openApp(context))
+            // Toccando la notifica si apre l'app sulla registrazione (conferma con titolo).
+            .setContentIntent(openApp(context, entry.docId))
         notify(context, idFor(entry.docId), builder)
     }
 
@@ -56,7 +64,7 @@ object Notifications {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val builder = base(context, CHANNEL_READY)
-            .setContentTitle("Proposta pronta: ${entry.info.label}")
+            .setContentTitle("Proposta pronta: ${entry.label}")
             .setContentText("Tocca per rivedere e approvare le azioni in Seguito.")
             .setContentIntent(open)
         notify(context, idFor(entry.docId), builder)
@@ -64,7 +72,7 @@ object Notifications {
 
     fun failed(context: Context, entry: RecEntry, message: String) {
         val builder = base(context, CHANNEL_ERRORS)
-            .setContentTitle("Registrazione non elaborata: ${entry.info.label}")
+            .setContentTitle("Registrazione non elaborata: ${entry.label}")
             .setContentText(message)
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))
             .setContentIntent(openApp(context))
@@ -92,12 +100,17 @@ object Notifications {
         }
     }
 
-    private fun openApp(context: Context): PendingIntent = PendingIntent.getActivity(
-        context,
-        0,
-        Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
-        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-    )
+    /** Apre l'app; con `docId` mostra la conferma di quella registrazione (un PendingIntent distinto per ognuna). */
+    private fun openApp(context: Context, docId: String? = null): PendingIntent {
+        val intent = Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        if (docId != null) intent.putExtra(MainActivity.EXTRA_DOC, docId)
+        return PendingIntent.getActivity(
+            context,
+            if (docId == null) 0 else ("apri$docId").hashCode(),
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+    }
 
     private fun actionIntent(context: Context, action: String, docId: String): PendingIntent = PendingIntent.getBroadcast(
         context,

@@ -40,6 +40,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,17 +67,37 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
+    /** Registrazione da mostrare all'apertura (tocco sulla notifica), una sola volta. */
+    private val openDoc = mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         RecordingStore.init(this)
+        if (savedInstanceState == null) readOpenDoc(intent)
         setContent {
             SeguitoTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    MainScreen()
+                    MainScreen(openDoc)
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        readOpenDoc(intent)
+    }
+
+    private fun readOpenDoc(intent: Intent?) {
+        // Non dalla schermata delle app recenti, che ripete l'ultimo intent.
+        if (intent == null || intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
+        openDoc.value = intent.getStringExtra(EXTRA_DOC)
+    }
+
+    companion object {
+        const val EXTRA_DOC = "it.seguito.app.REGISTRAZIONE"
     }
 
     override fun onResume() {
@@ -93,7 +115,7 @@ private fun SeguitoTheme(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun MainScreen() {
+private fun MainScreen(openDoc: MutableState<String?>) {
     val context = LocalContext.current
     val settings = remember { AppSettings(context) }
     val entries by RecordingStore.entries.collectAsStateWithLifecycle()
@@ -112,6 +134,9 @@ private fun MainScreen() {
     var notificationsGranted by remember { mutableStateOf(isGranted(context, Manifest.permission.POST_NOTIFICATIONS)) }
     var phoneGranted by remember { mutableStateOf(isGranted(context, Manifest.permission.READ_PHONE_STATE)) }
     var confirmExcluded by remember { mutableStateOf<RecEntry?>(null) }
+    var voiceEnabled by remember { mutableStateOf(settings.voiceEnabled) }
+    var voiceToSend by remember { mutableStateOf<RecEntry?>(null) }
+    var voiceTitle by remember { mutableStateOf("") }
 
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -119,6 +144,7 @@ private fun MainScreen() {
             settings.treeUri = uri
             // Le registrazioni già presenti nella nuova cartella non vengono inviate.
             settings.baselineDone = false
+            settings.voiceBaselineDone = false
             treeUri = uri
             Jobs.syncNow(context)
         }
@@ -241,12 +267,19 @@ private fun MainScreen() {
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
-                    "Scegli «Recordings» (o «Recordings/Call») nella memoria interna. L'app legge solo le chiamate " +
-                        "(cartella «Call», mai le note vocali) e non modifica né cancella le registrazioni. " +
-                        "Quelle già presenti non vengono inviate.",
+                    "Scegli «Recordings» nella memoria interna. L'app legge le chiamate (cartella «Call») e le " +
+                        "registrazioni del Registratore vocale (cartella «Voice Recorder»), non modifica né cancella " +
+                        "nulla. Quelle già presenti non vengono inviate.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (folder != null && voiceEnabled && Scanner.onlyCalls(folder)) {
+                    Text(
+                        "Hai scelto solo la cartella delle chiamate: per le registrazioni vocali scegli «Recordings».",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 Button(onClick = { folderPicker.launch(RECORDINGS_FOLDER) }) { Text("Scegli la cartella") }
             }
         }
@@ -260,6 +293,17 @@ private fun MainScreen() {
                 ChoiceRow("Invia in automatico", mode == SendMode.AUTOMATICO) {
                     mode = SendMode.AUTOMATICO
                     sendingSaved = false
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Switch(checked = voiceEnabled, onCheckedChange = {
+                        voiceEnabled = it
+                        sendingSaved = false
+                    })
+                    Text(
+                        "Registrazioni vocali (riunioni con clienti e team): proponi l'invio, sempre con conferma",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Switch(checked = excludeLawyers, onCheckedChange = {
@@ -294,6 +338,10 @@ private fun MainScreen() {
                         settings.mode = mode
                         settings.excludeLawyers = excludeLawyers
                         settings.exclusionRules = rules
+                        // Attivate ora: le registrazioni vocali già presenti non si propongono.
+                        if (voiceEnabled && !settings.voiceEnabled) settings.voiceBaselineDone = false
+                        settings.voiceEnabled = voiceEnabled
+                        if (voiceEnabled) Jobs.syncNow(context)
                         sendingSaved = true
                     }) { Text("Salva") }
                     if (sendingSaved) Text("Salvato.", style = MaterialTheme.typography.bodyMedium)
@@ -337,7 +385,7 @@ private fun MainScreen() {
         if (entries.isEmpty()) {
             item {
                 Text(
-                    "Nessuna registrazione ancora. Dopo una chiamata registrata comparirà qui.",
+                    "Nessuna registrazione ancora. Dopo una chiamata o una registrazione vocale comparirà qui.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -346,7 +394,17 @@ private fun MainScreen() {
         items(entries, key = { it.docId }) { entry ->
             EntryCard(
                 entry = entry,
-                onSend = { if (entry.status == RecStatus.ESCLUSA) confirmExcluded = entry else send(entry) },
+                onSend = {
+                    when {
+                        entry.status == RecStatus.ESCLUSA -> confirmExcluded = entry
+                        // Registrazione vocale da inviare: prima il titolo facoltativo.
+                        entry.kind == RecKind.VOCALE && entry.status != RecStatus.ERRORE -> {
+                            voiceTitle = entry.title.orEmpty()
+                            voiceToSend = entry
+                        }
+                        else -> send(entry)
+                    }
+                },
                 onCancel = { cancel(entry) },
                 onSkip = {
                     Notifications.cancel(context, entry.docId)
@@ -361,14 +419,58 @@ private fun MainScreen() {
         }
     }
 
+    // Tocco sulla notifica di una registrazione vocale: si apre la conferma con il titolo.
+    LaunchedEffect(openDoc.value, entries) {
+        val docId = openDoc.value ?: return@LaunchedEffect
+        val entry = entries.firstOrNull { it.docId == docId } ?: return@LaunchedEffect
+        openDoc.value = null
+        if (entry.kind == RecKind.VOCALE && entry.status in setOf(RecStatus.DA_CONFERMARE, RecStatus.PRECEDENTE, RecStatus.NON_INVIATA)) {
+            voiceTitle = entry.title.orEmpty()
+            voiceToSend = entry
+        }
+    }
+
+    voiceToSend?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { voiceToSend = null },
+            title = { Text("Inviare la registrazione vocale?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("${formatDate(entry.lastModified)}\nSeguito la trascrive e propone le azioni da approvare.")
+                    OutlinedTextField(
+                        value = voiceTitle,
+                        onValueChange = { voiceTitle = it.take(120) },
+                        label = { Text("Titolo (facoltativo)") },
+                        placeholder = { Text("Es. Riunione con il cliente Rossi") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    voiceToSend = null
+                    val title = voiceTitle.trim().ifEmpty { null }
+                    RecordingStore.update(entry.docId) { it.copy(title = title) }
+                    send(entry)
+                }) { Text("Invia a Seguito") }
+            },
+            dismissButton = { TextButton(onClick = { voiceToSend = null }) { Text("Annulla") } },
+        )
+    }
+
     confirmExcluded?.let { entry ->
         AlertDialog(
             onDismissRequest = { confirmExcluded = null },
             title = { Text("Inviare comunque?") },
             text = {
                 Text(
-                    "${entry.message ?: "La chiamata è esclusa dall'invio."}\n\nSe la chiamata è con un collega, " +
-                        "l'art. 38, comma 2, del Codice deontologico forense vieta di registrarla: in quel caso è meglio cancellarla.",
+                    if (entry.kind == RecKind.VOCALE) {
+                        entry.message ?: "La registrazione è esclusa dall'invio."
+                    } else {
+                        "${entry.message ?: "La chiamata è esclusa dall'invio."}\n\nSe la chiamata è con un collega, " +
+                            "l'art. 38, comma 2, del Codice deontologico forense vieta di registrarla: in quel caso è meglio cancellarla."
+                    },
                 )
             },
             confirmButton = {
@@ -404,9 +506,9 @@ private fun ChoiceRow(label: String, selected: Boolean, onSelect: () -> Unit) {
 private fun EntryCard(entry: RecEntry, onSend: () -> Unit, onCancel: () -> Unit, onSkip: () -> Unit, onOpen: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(entry.info.label, style = MaterialTheme.typography.titleMedium)
+            Text(entry.label, style = MaterialTheme.typography.titleMedium)
             Text(
-                formatDate(entry.lastModified),
+                (if (entry.kind == RecKind.VOCALE) "Registrazione vocale · " else "Chiamata · ") + formatDate(entry.lastModified),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
