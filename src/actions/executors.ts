@@ -1,9 +1,8 @@
 /**
- * Esecutori delle azioni approvate: eventi .ics e bozze .eml nella cartella
- * outbox (una sottocartella per proposta), pratiche e note nel gestionale.
+ * Esecutori delle azioni approvate: eventi di calendario e bozze email
+ * (depositati dall'ufficio: file .ics/.eml nell'outbox oppure Microsoft 365),
+ * pratiche e note nel gestionale.
  */
-import { randomUUID } from "node:crypto";
-import { join } from "node:path";
 import {
   formatDuration,
   formatItalianDate,
@@ -32,8 +31,7 @@ import {
   namesCompatible,
   strongestMatch,
 } from "../enrich/client-link.js";
-import { writeFileAtomic } from "../store/json-store.js";
-import { buildEml, isEmailAddress, type EmlAddress } from "./eml.js";
+import { isEmailAddress, type EmlAddress } from "./eml.js";
 import type { ActionExecutor, ExecutionContext } from "./executor.js";
 import {
   CONVERSATION_LABELS,
@@ -42,9 +40,8 @@ import {
   formatLocalDate,
   formatLocalDateTime,
   normalizeForComparison,
-  safeSlug,
 } from "./format.js";
-import { buildIcsEvent } from "./ics.js";
+import { FileOffice, type MessageSpec, type Office, type OfficeTarget } from "./office.js";
 
 type PayloadOf<T extends ActionPayload["type"]> = Extract<ActionPayload, { type: T }>;
 type CaseManagementType = "incarico" | "accordo_economico" | "documenti" | "attivita";
@@ -57,6 +54,8 @@ interface Outcome {
 
 const CLIENT_ROLES: ReadonlySet<ParticipantRole> = new Set(["cliente", "potenziale_cliente"]);
 const DEFAULT_APPOINTMENT_MINUTES = 60;
+/** Durata delle scadenze con orario. */
+const DEFAULT_DEADLINE_MINUTES = 60;
 const APPOINTMENT_ALARMS = [1440, 60];
 const DEADLINE_ALARMS = [10080, 1440];
 const NOTE_AUTHOR = "Seguito";
@@ -70,20 +69,27 @@ const HONORIFICS: ReadonlySet<string> = new Set(
   "sig sigra signor signora dott dottssa avv ing geom rag prof".split(" "),
 );
 
-export function defaultExecutors(): ActionExecutor[] {
+/** Esecutori di tutte le azioni; eventi e bozze vanno all'ufficio indicato (predefinito: file nell'outbox). */
+export function defaultExecutors(office: Office = new FileOffice()): ActionExecutor[] {
   return [
-    executor("calendario-appuntamenti", ["appuntamento"], executeAppointment),
-    executor("calendario-scadenze", ["scadenza"], executeDeadline),
-    executor("bozze-email", ["email"], executeEmail),
-    executor("invio-trascrizione", ["invio_trascrizione"], executeTranscript),
-    executor("gestionale", ["incarico", "accordo_economico", "documenti", "attivita"], executeCaseManagement),
+    executor("calendario-appuntamenti", ["appuntamento"], office, executeAppointment),
+    executor("calendario-scadenze", ["scadenza"], office, executeDeadline),
+    executor("bozze-email", ["email"], office, executeEmail),
+    executor("invio-trascrizione", ["invio_trascrizione"], office, executeTranscript),
+    executor(
+      "gestionale",
+      ["incarico", "accordo_economico", "documenti", "attivita"],
+      office,
+      executeCaseManagement,
+    ),
   ];
 }
 
 function executor<T extends ActionPayload["type"]>(
   name: string,
   types: readonly T[],
-  run: (action: ProposedAction, payload: PayloadOf<T>, ctx: ExecutionContext) => Promise<Outcome>,
+  office: Office,
+  run: (action: ProposedAction, payload: PayloadOf<T>, ctx: ExecutionContext, office: Office) => Promise<Outcome>,
 ): ActionExecutor {
   const handles = (payload: ActionPayload): payload is PayloadOf<T> =>
     (types as readonly string[]).includes(payload.type);
@@ -92,7 +98,7 @@ function executor<T extends ActionPayload["type"]>(
     canHandle: (action) => handles(action.payload),
     async execute(action, ctx) {
       const outcome = handles(action.payload)
-        ? await run(action, action.payload, ctx)
+        ? await run(action, action.payload, ctx, office)
         : failure(`Azione di tipo «${action.payload.type}» non gestita dall'esecutore «${name}».`);
       return { actionId: action.id, executedAt: ctx.now.toISOString(), ...outcome };
     },
@@ -107,28 +113,33 @@ async function executeAppointment(
   action: ProposedAction,
   p: PayloadOf<"appuntamento">,
   ctx: ExecutionContext,
+  office: Office,
 ): Promise<Outcome> {
   // Una data e ora indicate (anche dall'avvocato) prevalgono sullo stato «da fissare».
-  if (p.start === null && p.status === "da_fissare") return schedulingDraft(action, p, ctx);
+  if (p.start === null && p.status === "da_fissare") return schedulingDraft(action, p, ctx, office);
   if (p.start === null || !isLocalDateTime(p.start)) {
     return failure("Data e ora dell'appuntamento mancanti o non valide: indicarle e approvare di nuovo.");
   }
-  const ics = buildIcsEvent({
-    uid: eventUid(ctx, action),
-    title: p.title,
-    description: appointmentDescription(p, ctx),
-    location: p.location ?? modeLocation(p.mode, ctx.studio),
-    start: p.start,
-    durationMinutes:
-      p.durationMinutes !== null && p.durationMinutes > 0 ? p.durationMinutes : DEFAULT_APPOINTMENT_MINUTES,
-    timezone: ctx.studio.timezone,
-    alarmsMinutesBefore: APPOINTMENT_ALARMS,
-    now: ctx.now,
-  });
-  const path = await writeOutboxFile(ctx, action, p.title, "ics", ics);
-  return success(`Evento del calendario creato: ${formatLocalDateTime(p.start, ctx.studio.timezone)}.`, [
-    { kind: "ics", label: `Evento: ${p.title}`, path, ref: null },
-  ]);
+  const artifact = await office.createEvent(
+    {
+      label: `Evento: ${p.title}`,
+      stem: p.title,
+      title: p.title,
+      description: appointmentDescription(p, ctx),
+      location: p.location ?? modeLocation(p.mode, ctx.studio),
+      start: p.start,
+      allDayDate: null,
+      durationMinutes:
+        p.durationMinutes !== null && p.durationMinutes > 0 ? p.durationMinutes : DEFAULT_APPOINTMENT_MINUTES,
+      remindersMinutesBefore: APPOINTMENT_ALARMS,
+      busy: true,
+    },
+    { ctx, action },
+  );
+  return success(
+    `Evento del ${office.calendarName} creato: ${formatLocalDateTime(p.start, ctx.studio.timezone)}.`,
+    [artifact],
+  );
 }
 
 function appointmentDescription(p: PayloadOf<"appuntamento">, ctx: ExecutionContext): string {
@@ -167,6 +178,7 @@ async function schedulingDraft(
   action: ProposedAction,
   p: PayloadOf<"appuntamento">,
   ctx: ExecutionContext,
+  office: Office,
 ): Promise<Outcome> {
   const covering = coveringClientEmail(ctx);
   if (covering !== null) {
@@ -197,12 +209,13 @@ async function schedulingDraft(
     "",
     ctx.studio.signature,
   ].join("\n");
-  const path = await writeDraft(ctx, action, subject, recipient === null ? [] : [recipient], text);
+  const artifact = await draft(office, { ctx, action }, { subject, to: recipient === null ? [] : [recipient], text });
+  const created = `Bozza email per fissare l'appuntamento creata${office.draftPlace}`;
   return success(
     recipient === null
-      ? "Bozza email per fissare l'appuntamento creata senza destinatario: aggiungerlo prima dell'invio."
-      : `Bozza email per fissare l'appuntamento creata (destinatario: ${recipient.name ?? recipient.email}).`,
-    [{ kind: "eml", label: `Bozza email: ${subject}`, path, ref: null }],
+      ? `${created} senza destinatario: aggiungerlo prima dell'invio.`
+      : `${created} (destinatario: ${recipient.name ?? recipient.email}).`,
+    [artifact],
   );
 }
 
@@ -290,36 +303,39 @@ async function executeDeadline(
   action: ProposedAction,
   p: PayloadOf<"scadenza">,
   ctx: ExecutionContext,
+  office: Office,
 ): Promise<Outcome> {
   if (p.date === null || !isLocalDate(p.date)) {
     return failure("Data della scadenza mancante o non valida: indicarla e approvare di nuovo.");
   }
   const start = p.time !== null && isLocalDateTime(`${p.date}T${p.time}`) ? `${p.date}T${p.time}` : null;
-  const ics = buildIcsEvent({
-    uid: eventUid(ctx, action),
-    // I termini processuali sono sempre da verificare: lo si vede anche dall'elenco del calendario.
-    title: `Scadenza: ${p.title}${p.kind === "processuale" ? " (da verificare)" : ""}`,
-    description: [
-      ...describeAction(p, ctx.studio.timezone).lines.slice(1),
-      verificationLine(p),
-      `Registrazione: «${ctx.recording.title}»`,
-      `Generato da Seguito dalla registrazione di ${recordingDateTime(ctx)}`,
-    ]
-      .filter((line): line is string => line !== null)
-      .join("\n"),
-    start,
-    allDayDate: p.date,
-    timezone: ctx.studio.timezone,
-    alarmsMinutesBefore: DEADLINE_ALARMS,
-    now: ctx.now,
-  });
-  const path = await writeOutboxFile(ctx, action, p.title, "ics", ics);
+  const artifact = await office.createEvent(
+    {
+      label: `Scadenza: ${p.title}`,
+      stem: p.title,
+      // I termini processuali sono sempre da verificare: lo si vede anche dall'elenco del calendario.
+      title: `Scadenza: ${p.title}${p.kind === "processuale" ? " (da verificare)" : ""}`,
+      description: [
+        ...describeAction(p, ctx.studio.timezone).lines.slice(1),
+        verificationLine(p),
+        `Registrazione: «${ctx.recording.title}»`,
+        `Generato da Seguito dalla registrazione di ${recordingDateTime(ctx)}`,
+      ]
+        .filter((line): line is string => line !== null)
+        .join("\n"),
+      location: null,
+      start,
+      allDayDate: p.date,
+      durationMinutes: DEFAULT_DEADLINE_MINUTES,
+      remindersMinutesBefore: DEADLINE_ALARMS,
+      busy: false,
+    },
+    { ctx, action },
+  );
   const when = `${formatItalianDate(p.date)}${start === null ? "" : `, ore ${p.time}`}`;
   const ignoredTime =
     p.time !== null && start === null ? " L'orario indicato non è valido: evento sull'intera giornata." : "";
-  return success(`Scadenza inserita nel calendario: ${when}.${ignoredTime}`, [
-    { kind: "ics", label: `Scadenza: ${p.title}`, path, ref: null },
-  ]);
+  return success(`Scadenza inserita nel ${office.calendarName}: ${when}.${ignoredTime}`, [artifact]);
 }
 
 function verificationLine(p: PayloadOf<"scadenza">): string | null {
@@ -331,12 +347,22 @@ function verificationLine(p: PayloadOf<"scadenza">): string | null {
 // Email
 // ---------------------------------------------------------------------------
 
-async function executeEmail(action: ProposedAction, p: PayloadOf<"email">, ctx: ExecutionContext): Promise<Outcome> {
+async function executeEmail(
+  action: ProposedAction,
+  p: PayloadOf<"email">,
+  ctx: ExecutionContext,
+  office: Office,
+): Promise<Outcome> {
   const email = p.recipientEmail?.trim() || null;
   const to = email === null ? [] : [{ name: p.recipientName?.trim() || null, email }];
-  const path = await writeDraft(ctx, action, p.subject, to, `${p.body.trimEnd()}\n\n${ctx.studio.signature}`);
-  return success(email === null ? "Bozza creata senza destinatario: aggiungerlo prima dell'invio." : "Bozza creata.", [
-    { kind: "eml", label: `Bozza email: ${p.subject}`, path, ref: null },
+  const artifact = await draft(
+    office,
+    { ctx, action },
+    { subject: p.subject, to, text: `${p.body.trimEnd()}\n\n${ctx.studio.signature}` },
+  );
+  const created = `Bozza creata${office.draftPlace}`;
+  return success(email === null ? `${created} senza destinatario: aggiungerlo prima dell'invio.` : `${created}.`, [
+    artifact,
   ]);
 }
 
@@ -348,20 +374,35 @@ async function executeTranscript(
   action: ProposedAction,
   p: PayloadOf<"invio_trascrizione">,
   ctx: ExecutionContext,
+  office: Office,
 ): Promise<Outcome> {
   const { recording } = ctx;
   const subject = `Trascrizione – ${recording.title} – ${recordingDate(ctx)}`;
   const transcript = transcriptLines(ctx).join("\n");
   const header = `${recording.title}\n${recordingDateTime(ctx)} – durata ${formatDuration(recording.durationMs)}`;
   const to = p.to.trim() === "" ? [] : [{ name: null, email: p.to.trim() }];
-  const path = await writeDraft(ctx, action, subject, to, transcriptBody(ctx, transcript), [
-    { filename: "trascrizione.txt", contentType: "text/plain; charset=utf-8", content: `${header}\n\n${transcript}\n` },
-  ]);
+  const { artifact, sent } = await office.deliverToStudio(
+    {
+      label: `Bozza email: ${subject}`,
+      to,
+      subject,
+      text: transcriptBody(ctx, transcript),
+      attachments: [
+        {
+          filename: "trascrizione.txt",
+          contentType: "text/plain; charset=utf-8",
+          content: `${header}\n\n${transcript}\n`,
+        },
+      ],
+    },
+    { ctx, action },
+  );
+  if (sent) return success(`Trascrizione inviata a ${p.to.trim()}.`, [artifact]);
   return success(
     to.length === 0
-      ? "Bozza con la trascrizione creata senza destinatario: aggiungerlo prima dell'invio."
-      : `Bozza con la trascrizione per ${p.to.trim()} creata.`,
-    [{ kind: "eml", label: `Bozza email: ${subject}`, path, ref: null }],
+      ? `Bozza con la trascrizione creata${office.draftPlace} senza destinatario: aggiungerlo prima dell'invio.`
+      : `Bozza con la trascrizione per ${p.to.trim()} creata${office.draftPlace}.`,
+    [artifact],
   );
 }
 
@@ -606,10 +647,6 @@ function participantName(p: ProposalParticipant): string {
   return `${p.name ?? "Nome non indicato"} (${ROLE_LABELS[p.role]})`;
 }
 
-function eventUid(ctx: ExecutionContext, action: ProposedAction): string {
-  return `${safeSlug(ctx.proposal.id)}-${safeSlug(action.id)}@seguito`;
-}
-
 function recordingStart(ctx: ExecutionContext): Date | null {
   const date = new Date(ctx.recording.startedAt);
   return Number.isNaN(date.getTime()) ? null : date;
@@ -632,36 +669,7 @@ function timeOf(iso: string): number {
   return Number.isNaN(t) ? 0 : t;
 }
 
-/** Scrive il file nella cartella della proposta; restituisce il percorso relativo all'outbox. */
-async function writeOutboxFile(
-  ctx: ExecutionContext,
-  action: ProposedAction,
-  name: string,
-  extension: "ics" | "eml",
-  content: string,
-): Promise<string> {
-  const dir = safeSlug(ctx.proposal.id);
-  const fileName = `${safeSlug(action.id)}-${safeSlug(name)}.${extension}`;
-  await writeFileAtomic(join(ctx.outboxDir, dir, fileName), content);
-  return `${dir}/${fileName}`;
-}
-
-async function writeDraft(
-  ctx: ExecutionContext,
-  action: ProposedAction,
-  subject: string,
-  to: EmlAddress[],
-  text: string,
-  attachments?: Array<{ filename: string; contentType: string; content: string }>,
-): Promise<string> {
-  const eml = buildEml({
-    from: { name: ctx.studio.lawyerName, email: ctx.studio.lawyerEmail },
-    to,
-    subject,
-    text,
-    date: ctx.now,
-    messageId: `${randomUUID()}@seguito.local`,
-    ...(attachments === undefined ? {} : { attachments }),
-  });
-  return writeOutboxFile(ctx, action, subject, "eml", eml);
+/** Bozza dall'ufficio, con l'etichetta usata nell'esito dell'approvazione. */
+function draft(office: Office, target: OfficeTarget, message: Omit<MessageSpec, "label">): Promise<ExecutionArtifact> {
+  return office.createDraft({ label: `Bozza email: ${message.subject}`, ...message }, target);
 }
