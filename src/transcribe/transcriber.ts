@@ -10,6 +10,8 @@ export interface TranscriptionInput {
   contentType: string;
   /** Lingua della conversazione (codice ISO 639-1). */
   language: string;
+  /** Arresto di Seguito: il servizio interrompe l'attesa e libera le risorse. */
+  signal?: AbortSignal;
 }
 
 export interface TranscribedSegment {

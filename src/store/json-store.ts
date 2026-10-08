@@ -6,7 +6,7 @@
  * <dataDir>/proposals/<id codificato>.json, <dataDir>/checkpoints.json.
  */
 import { randomBytes } from "node:crypto";
-import { access, link, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, link, mkdir, open, readdir, readFile, rename, rm, writeFile, type FileHandle } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { ProposalSchema, RecordingSchema, type Proposal, type Recording } from "../domain/types.js";
@@ -29,8 +29,9 @@ export async function writeFileAtomic(filePath: string, content: string): Promis
   await mkdir(dirname(filePath), { recursive: true, mode: DIR_MODE });
   const tmp = `${filePath}.${process.pid}-${randomBytes(6).toString("hex")}.tmp`;
   try {
-    await writeFile(tmp, content, { mode: FILE_MODE, flag: "wx" });
+    await writeFile(tmp, content, { mode: FILE_MODE, flag: "wx", flush: true });
     await rename(tmp, filePath);
+    await syncDirectory(dirname(filePath));
   } catch (err) {
     await rm(tmp, { force: true });
     throw err;
@@ -46,14 +47,33 @@ export async function writeFileIfAbsent(filePath: string, content: string): Prom
   await mkdir(dirname(filePath), { recursive: true, mode: DIR_MODE });
   const tmp = `${filePath}.${process.pid}-${randomBytes(6).toString("hex")}.tmp`;
   try {
-    await writeFile(tmp, content, { mode: FILE_MODE, flag: "wx" });
+    await writeFile(tmp, content, { mode: FILE_MODE, flag: "wx", flush: true });
     await link(tmp, filePath);
+    await syncDirectory(dirname(filePath));
     return true;
   } catch (err) {
     if (isAlreadyExistsError(err)) return false;
     throw err;
   } finally {
     await rm(tmp, { force: true });
+  }
+}
+
+/**
+ * Rende durevole su disco il nome appena creato o rinominato nella cartella,
+ * così un'interruzione di corrente non lo perde (per esempio prima di
+ * cancellare l'audio di cui il file contiene la trascrizione). Dove non è
+ * possibile aprire una cartella (Windows) si affida al sistema operativo.
+ */
+async function syncDirectory(dir: string): Promise<void> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(dir, "r");
+    await handle.sync();
+  } catch {
+    // non supportato su questo sistema
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
 }
 

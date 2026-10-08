@@ -320,13 +320,18 @@ async function startPhoneInbox(
     console.log("Ricezione delle chiamate dal telefono non attiva: serve anche la chiave di Claude (ANTHROPIC_API_KEY).");
     return null;
   }
-  let host: string;
+  let url: URL;
   try {
-    host = new URL(speechmatics.url).hostname;
+    url = new URL(speechmatics.url);
   } catch {
     throw new CliError(`Indirizzo non valido in SPEECHMATICS_URL: «${speechmatics.url}».`);
   }
-  if (!/^eu\d*\./.test(host)) {
+  const host = url.hostname;
+  // La chiave e l'audio viaggiano solo cifrati (http solo verso questo computer, per le prove).
+  if (url.protocol !== "https:" && !LOOPBACK_HOSTS.has(host.replace(/^\[|\]$/g, ""))) {
+    throw new CliError(`SPEECHMATICS_URL deve iniziare con https:// («${speechmatics.url}»).`);
+  }
+  if (!/^eu\d*\.[a-z0-9.-]*speechmatics\.com$/.test(host)) {
     console.error(
       `Attenzione: SPEECHMATICS_URL (${host}) non è la regione UE di Speechmatics: l'audio delle chiamate uscirebbe dall'Unione europea.`,
     );
@@ -346,6 +351,9 @@ async function startPhoneInbox(
     log: (message) => console.log(message),
   });
   await inbox.resume();
+  // All'arresto la trascrizione in corso si interrompe e il lavoro presso Speechmatics si cancella.
+  process.once("SIGINT", () => inbox.stop());
+  process.once("SIGTERM", () => inbox.stop());
   console.log(`Ricezione delle chiamate dal telefono attiva (trascrizione: Speechmatics, ${host}).`);
   return inbox;
 }

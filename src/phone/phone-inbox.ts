@@ -9,7 +9,7 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { pipeline as pipeStreams } from "node:stream/promises";
@@ -99,6 +99,9 @@ const DEFAULT_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000, 6
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 const ID_LENGTH = 32;
+const ID_PATTERN = /^[0-9a-f]{32}$/;
+/** Tolleranza sull'orologio del telefono per le date nel futuro. */
+const MAX_CLOCK_SKEW_MS = 24 * 60 * 60_000;
 
 const MESSAGES = {
   empty: "Il file ricevuto è vuoto.",
@@ -116,6 +119,8 @@ export class PhoneInbox {
   private readonly log: (message: string) => void;
   private readonly retryDelays: readonly number[];
   private chain: Promise<void> = Promise.resolve();
+  private stopped = false;
+  private readonly abort = new AbortController();
   private readonly queued = new Set<string>();
   private readonly timers = new Set<NodeJS.Timeout>();
 
@@ -159,32 +164,32 @@ export class PhoneInbox {
       throw new PhoneUploadError(400, MESSAGES.empty);
     }
     const id = hash.digest("hex").slice(0, ID_LENGTH);
-    const existing = await this.get(id);
-    if (existing !== null) {
+    try {
+      const existing = await this.get(id);
+      if (existing !== null) {
+        if (await this.needsAudioAgain(existing)) return { upload: await this.restart(existing, tmp), created: true };
+        await rm(tmp, { force: true });
+        return { upload: existing, created: false };
+      }
+      const upload = this.newUpload(id, meta, size);
+      await rename(tmp, this.audioPath(id));
+      if (!(await writeFileIfAbsent(this.metaPath(id), serialize(upload)))) {
+        // Stesso audio arrivato in contemporanea: vale la prima registrazione.
+        return { upload: (await this.get(id)) ?? upload, created: false };
+      }
+      this.log(`Registrazione dal telefono ricevuta: «${upload.title}».`);
+      this.enqueue(id);
+      return { upload, created: true };
+    } catch (err) {
       await rm(tmp, { force: true });
-      return { upload: existing, created: false };
+      throw err;
     }
-    await rename(tmp, this.audioPath(id));
-    const upload = this.newUpload(id, meta, size);
-    if (!(await writeFileIfAbsent(this.metaPath(id), serialize(upload)))) {
-      // Stesso audio arrivato in contemporanea: vale la prima registrazione.
-      return { upload: (await this.get(id)) ?? upload, created: false };
-    }
-    this.log(`Registrazione dal telefono ricevuta: «${upload.title}».`);
-    this.enqueue(id);
-    return { upload, created: true };
   }
 
   async get(id: string): Promise<PhoneUpload | null> {
-    if (!/^[0-9a-f]{32}$/.test(id)) return null;
-    let raw: string;
-    try {
-      raw = await readFile(this.metaPath(id), "utf8");
-    } catch {
-      return null;
-    }
-    const parsed = PhoneUploadSchema.safeParse(JSON.parse(raw));
-    return parsed.success ? parsed.data : null;
+    if (!ID_PATTERN.test(id)) return null;
+    const loaded = await this.load(id);
+    return typeof loaded === "string" ? null : loaded;
   }
 
   /** Le registrazioni più recenti per prime. */
@@ -214,8 +219,9 @@ export class PhoneInbox {
     return reset;
   }
 
-  /** All'avvio: riprende le registrazioni interrotte e riprogramma i tentativi. */
+  /** All'avvio: elimina i resti di invii interrotti, riprende le registrazioni a metà e riprogramma i tentativi. */
   async resume(): Promise<void> {
+    await this.sweep();
     for (const upload of await this.list(Number.MAX_SAFE_INTEGER)) {
       if (upload.status === "ricevuta" || upload.status === "in_trascrizione" || upload.status === "in_analisi") {
         this.enqueue(upload.id);
@@ -235,14 +241,20 @@ export class PhoneInbox {
     } while (current !== this.chain);
   }
 
-  /** Annulla i tentativi programmati (arresto del server, prove). */
+  /**
+   * Arresto del server: annulla i tentativi programmati e interrompe la
+   * trascrizione in corso (il lavoro presso il servizio viene cancellato). Le
+   * registrazioni interrotte restano nel loro stato e riprendono al riavvio.
+   */
   stop(): void {
+    this.stopped = true;
+    this.abort.abort();
     for (const timer of this.timers) clearTimeout(timer);
     this.timers.clear();
   }
 
   private enqueue(id: string): void {
-    if (this.queued.has(id)) return;
+    if (this.stopped || this.queued.has(id)) return;
     this.queued.add(id);
     this.chain = this.chain.then(async () => {
       this.queued.delete(id);
@@ -264,6 +276,7 @@ export class PhoneInbox {
   }
 
   private async process(id: string): Promise<void> {
+    if (this.stopped) return;
     let upload = await this.get(id);
     if (upload === null || upload.status === "pronta" || upload.status === "errore") return;
     try {
@@ -284,6 +297,8 @@ export class PhoneInbox {
       await this.save({ ...upload, status: "pronta", message: null, nextAttemptAt: null, proposalId: proposal.id });
       this.log(`Proposta pronta per «${upload.title}».`);
     } catch (err) {
+      // Interrotta dall'arresto: lo stato resta «in corso» e resume() la riprende.
+      if (this.stopped) return;
       await this.fail(upload, err);
     }
   }
@@ -294,6 +309,7 @@ export class PhoneInbox {
       audioPath,
       contentType: upload.contentType,
       language: this.opts.language ?? "it",
+      signal: this.abort.signal,
     });
     const segments = transcript.segments
       .map((s) => ({ ...s, text: s.text.trim() }))
@@ -355,13 +371,95 @@ export class PhoneInbox {
     };
   }
 
-  /** Inizio della chiamata: dal nome del file, altrimenti fine del file meno la durata, altrimenti ora. */
+  /**
+   * Inizio della chiamata: dal nome del file, altrimenti fine del file meno la
+   * durata, altrimenti ora. Una data assurda indicata dal telefono vale «ora».
+   */
   private startedAt(startedLocal: string | null, meta: ReceiveMeta, now: Date): string {
     if (startedLocal !== null) return zonedLocalToUtc(startedLocal, this.opts.deps.studio.timezone).toISOString();
-    if (meta.lastModifiedMs !== null && Number.isFinite(meta.lastModifiedMs)) {
-      return new Date(meta.lastModifiedMs - (meta.durationMs ?? 0)).toISOString();
+    if (meta.lastModifiedMs !== null) {
+      const started = new Date(meta.lastModifiedMs - (meta.durationMs ?? 0));
+      const time = started.getTime();
+      if (Number.isFinite(time) && time <= now.getTime() + MAX_CLOCK_SKEW_MS) return started.toISOString();
     }
     return now.toISOString();
+  }
+
+  /** Stato della registrazione: assente, oppure illeggibile (file danneggiato, per esempio dopo un blackout). */
+  private async load(id: string): Promise<PhoneUpload | "assente" | "illeggibile"> {
+    let raw: string;
+    try {
+      raw = await readFile(this.metaPath(id), "utf8");
+    } catch {
+      return "assente";
+    }
+    try {
+      const parsed = PhoneUploadSchema.safeParse(JSON.parse(raw));
+      if (parsed.success) return parsed.data;
+    } catch {
+      // JSON non valido
+    }
+    console.error(`[seguito] Stato illeggibile per la registrazione dal telefono ${id}.`);
+    return "illeggibile";
+  }
+
+  /**
+   * Il telefono ha inviato di nuovo un audio già ricevuto: serve davvero solo se
+   * la registrazione è in errore e non ci sono più né l'audio né la trascrizione.
+   */
+  private async needsAudioAgain(upload: PhoneUpload): Promise<boolean> {
+    if (upload.status !== "errore" || (await exists(this.audioPath(upload.id)))) return false;
+    return upload.recordingId === null || (await this.opts.deps.store.getRecording(upload.recordingId)) === null;
+  }
+
+  /** Riparte da capo con l'audio appena ricevuto. */
+  private async restart(upload: PhoneUpload, tmp: string): Promise<PhoneUpload> {
+    await rename(tmp, this.audioPath(upload.id));
+    const reset = await this.save({
+      ...upload,
+      status: "ricevuta",
+      message: null,
+      attempts: 0,
+      nextAttemptAt: null,
+      recordingId: null,
+      proposalId: null,
+    });
+    this.log(`Registrazione dal telefono ricevuta di nuovo: «${upload.title}».`);
+    this.enqueue(upload.id);
+    return reset;
+  }
+
+  /**
+   * Pulizia all'avvio, prima di accettare invii: file parziali di invii
+   * interrotti, audio senza registrazione o già trascritto, stati illeggibili
+   * (il telefono conserva l'originale e può inviarlo di nuovo).
+   */
+  private async sweep(): Promise<void> {
+    let names: string[];
+    try {
+      names = await readdir(this.opts.dir);
+    } catch {
+      return;
+    }
+    const ids = new Set<string>();
+    for (const name of names) {
+      if (name.startsWith(".in-")) {
+        await rm(join(this.opts.dir, name), { force: true });
+        continue;
+      }
+      const match = /^([0-9a-f]{32})\.(json|audio)$/.exec(name);
+      if (match?.[1] !== undefined) ids.add(match[1]);
+    }
+    for (const id of ids) {
+      const loaded = await this.load(id);
+      if (loaded === "illeggibile") {
+        await rm(this.metaPath(id), { force: true });
+        await rm(this.audioPath(id), { force: true });
+        this.log(`Stato di una registrazione dal telefono danneggiato (${id}): eliminata; se serve, inviarla di nuovo dal telefono.`);
+      } else if (loaded === "assente" || loaded.recordingId !== null) {
+        await rm(this.audioPath(id), { force: true });
+      }
+    }
   }
 
   private async save(upload: PhoneUpload): Promise<PhoneUpload> {
@@ -376,6 +474,15 @@ export class PhoneInbox {
 
   private audioPath(id: string): string {
     return join(this.opts.dir, `${id}.audio`);
+  }
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
   }
 }
 

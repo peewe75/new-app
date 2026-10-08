@@ -182,10 +182,16 @@ export function createAppServer(services: AppServices): Server {
     exclusive: createExclusiveRunner(),
     sync: services.sync ? singleFlight(services.sync) : null,
   };
-  return createServer((req, res) => {
+  // Una registrazione lunga inviata da fuori studio (Tailscale, rete lenta) può
+  // richiedere più dei 5 minuti predefiniti di Node: si tollera fino a 64 KB/s.
+  const requestTimeout = Math.max(DEFAULT_REQUEST_TIMEOUT_MS, Math.ceil((services.phone?.maxBytes ?? 0) / MIN_UPLOAD_BYTES_PER_MS));
+  return createServer({ requestTimeout }, (req, res) => {
     void handleRequest(ctx, req, res);
   });
 }
+
+const DEFAULT_REQUEST_TIMEOUT_MS = 300_000;
+const MIN_UPLOAD_BYTES_PER_MS = 64;
 
 async function handleRequest(ctx: AppContext, req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
@@ -370,8 +376,8 @@ async function receivePhoneRecording(ctx: AppContext, req: IncomingMessage, res:
   const { upload, created } = await phone.receive(req, {
     fileName,
     contentType,
-    lastModifiedMs: positiveNumber(query.get("modificato")),
-    durationMs: positiveNumber(query.get("durata")),
+    lastModifiedMs: boundedMs(query.get("modificato"), MAX_DATE_MS),
+    durationMs: boundedMs(query.get("durata"), MAX_CALL_MS),
   });
   sendJson(res, created ? 201 : 200, phoneView(upload));
 }
@@ -390,10 +396,15 @@ async function retryPhoneRecording(ctx: AppContext, res: ServerResponse, id: str
   sendJson(res, 200, phoneView(await requirePhone(ctx).retry(id)));
 }
 
-function positiveNumber(value: string | null): number | null {
+/** Data valida più lontana per JavaScript e durata massima plausibile di una chiamata, in ms. */
+const MAX_DATE_MS = 8.64e15;
+const MAX_CALL_MS = 7 * 24 * 60 * 60_000;
+
+/** Millisecondi interi tra 0 e `max`; altrimenti null (valore assente o non plausibile). */
+function boundedMs(value: string | null, max: number): number | null {
   if (value === null || value.trim() === "") return null;
-  const n = Number(value);
-  return Number.isFinite(n) && n >= 0 ? n : null;
+  const n = Math.round(Number(value));
+  return Number.isFinite(n) && n >= 0 && n <= max ? n : null;
 }
 
 async function disconnectMicrosoft(ctx: AppContext, res: ServerResponse): Promise<void> {

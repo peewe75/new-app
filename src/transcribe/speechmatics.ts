@@ -22,7 +22,8 @@ export interface SpeechmaticsOptions {
   /** Parole da riconoscere meglio (termini giuridici, nomi ricorrenti). */
   vocabulary?: readonly string[];
   fetchImpl?: typeof fetch;
-  sleep?: (ms: number) => Promise<void>;
+  /** Attesa interrompibile (prove: attesa finta). */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Attesa tra un controllo e l'altro dello stato del lavoro. */
   pollIntervalMs?: number;
   /** Tempo massimo di attesa della trascrizione. */
@@ -54,6 +55,10 @@ const UPLOAD_TIMEOUT_MS = 30 * 60_000;
 const REQUEST_TIMEOUT_MS = 60_000;
 const DEFAULT_POLL_MS = 15_000;
 const DEFAULT_MAX_WAIT_MS = 3 * 60 * 60_000;
+/** Controlli di stato falliti di seguito (rete, sovraccarico) prima di rinunciare. */
+const MAX_CONSECUTIVE_FAILURES = 8;
+/** Attese tra i tentativi di lettura della trascrizione pronta. */
+const TRANSCRIPT_RETRY_WAITS_MS = [5_000, 15_000, 30_000, 60_000];
 /** Un turno di parola si spezza a fine frase dopo una pausa o quando diventa lungo. */
 const PAUSE_SPLIT_S = 1.5;
 const MAX_WORDS_PER_SEGMENT = 60;
@@ -98,31 +103,41 @@ const MESSAGES = {
   busy: "Speechmatics è momentaneamente sovraccarico: nuovo tentativo più tardi.",
   tooSlow: "La trascrizione richiede più del previsto: nuovo tentativo più tardi.",
   expired: "Il lavoro di trascrizione non è più disponibile su Speechmatics: verrà ripetuto.",
+  stopped: "Trascrizione interrotta dall'arresto di Seguito: riprenderà al riavvio.",
   unexpected: "Risposta di Speechmatics non valida: nuovo tentativo più tardi.",
 } as const;
+
+/** Servizio momentaneamente non disponibile (rete, sovraccarico, errore del server): si riprova subito. */
+class ServiceUnavailableError extends TranscriptionError {
+  constructor(message: string) {
+    super(message, true);
+  }
+}
 
 export class SpeechmaticsTranscriber implements Transcriber {
   readonly name = "speechmatics";
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
-  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
 
   constructor(private readonly opts: SpeechmaticsOptions) {
     this.baseUrl = (opts.baseUrl ?? SPEECHMATICS_EU_URL).replace(/\/+$/, "");
     this.fetchImpl = opts.fetchImpl ?? fetch;
-    this.sleep = opts.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.sleep = opts.sleep ?? abortableSleep;
   }
 
   async transcribe(input: TranscriptionInput): Promise<Transcript> {
+    const { signal } = input;
     const jobId = await this.createJob(input);
     try {
-      const duration = await this.waitForJob(jobId);
-      const transcript = await this.fetchTranscript(jobId);
+      const duration = await this.waitForJob(jobId, signal);
+      const transcript = await this.withRetries(TRANSCRIPT_RETRY_WAITS_MS, signal, () => this.fetchTranscript(jobId, signal));
       return {
         segments: toSegments(transcript.results),
         durationMs: secondsToMs(transcript.job?.duration ?? duration),
       };
     } finally {
+      // Anche in caso di errore o di arresto: l'audio non deve restare presso il servizio.
       await this.deleteJob(jobId);
     }
   }
@@ -148,19 +163,31 @@ export class SpeechmaticsTranscriber implements Transcriber {
     const form = new FormData();
     form.append("config", JSON.stringify(this.config(input.language)));
     form.append("data_file", await openAsBlob(input.audioPath, { type: input.contentType }), uploadName(input.audioPath));
-    const response = await this.call("POST", "/jobs", form, UPLOAD_TIMEOUT_MS);
+    const response = await this.call("POST", "/jobs", input.signal, form, UPLOAD_TIMEOUT_MS);
     const parsed = JobCreatedSchema.safeParse(await response.json().catch(() => null));
     if (!parsed.success) throw new TranscriptionError(MESSAGES.unexpected, true);
     return parsed.data.id;
   }
 
-  /** Attende la fine del lavoro; restituisce la durata dell'audio in secondi, se indicata. */
-  private async waitForJob(jobId: string): Promise<number | undefined> {
+  /**
+   * Attende la fine del lavoro; restituisce la durata dell'audio in secondi, se
+   * indicata. Un'interruzione di rete passeggera non fa ripetere (e pagare di
+   * nuovo) l'intera trascrizione: si continua a controllare fino al limite.
+   */
+  private async waitForJob(jobId: string, signal: AbortSignal | undefined): Promise<number | undefined> {
     const interval = this.opts.pollIntervalMs ?? DEFAULT_POLL_MS;
     const deadline = (this.opts.maxWaitMs ?? DEFAULT_MAX_WAIT_MS) / interval;
+    let failures = 0;
     for (let attempt = 0; attempt <= deadline; attempt++) {
-      if (attempt > 0) await this.sleep(interval);
-      const response = await this.call("GET", `/jobs/${encodeURIComponent(jobId)}?wait=0`);
+      if (attempt > 0) await this.pause(interval, signal);
+      let response: Response;
+      try {
+        response = await this.call("GET", `/jobs/${encodeURIComponent(jobId)}?wait=0`, signal);
+      } catch (err) {
+        if (err instanceof ServiceUnavailableError && ++failures < MAX_CONSECUTIVE_FAILURES) continue;
+        throw err;
+      }
+      failures = 0;
       const parsed = JobStatusSchema.safeParse(await response.json().catch(() => null));
       if (!parsed.success) throw new TranscriptionError(MESSAGES.unexpected, true);
       const { status, duration, errors } = parsed.data.job;
@@ -174,42 +201,68 @@ export class SpeechmaticsTranscriber implements Transcriber {
     throw new TranscriptionError(MESSAGES.tooSlow, true);
   }
 
-  private async fetchTranscript(jobId: string): Promise<z.infer<typeof TranscriptSchema>> {
-    const response = await this.call("GET", `/jobs/${encodeURIComponent(jobId)}/transcript?format=json-v2`);
+  private async fetchTranscript(jobId: string, signal: AbortSignal | undefined): Promise<z.infer<typeof TranscriptSchema>> {
+    const response = await this.call("GET", `/jobs/${encodeURIComponent(jobId)}/transcript?format=json-v2`, signal);
     const parsed = TranscriptSchema.safeParse(await response.json().catch(() => null));
     if (!parsed.success) throw new TranscriptionError(MESSAGES.unexpected, true);
     return parsed.data;
   }
 
-  /** Cancellazione immediata dal servizio; se non riesce, Speechmatics cancella comunque dopo 7 giorni. */
+  /** Ripete l'operazione se il servizio è momentaneamente non disponibile. */
+  private async withRetries<T>(waits: readonly number[], signal: AbortSignal | undefined, run: () => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await run();
+      } catch (err) {
+        const wait = waits[attempt];
+        if (!(err instanceof ServiceUnavailableError) || wait === undefined) throw err;
+        await this.pause(wait, signal);
+      }
+    }
+  }
+
+  /**
+   * Cancellazione immediata dal servizio; se non riesce, Speechmatics cancella
+   * comunque dopo 7 giorni. Non segue l'arresto di Seguito: va fatta anche allora.
+   */
   private async deleteJob(jobId: string): Promise<void> {
     for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) await this.sleep(2_000);
       try {
         const response = await this.fetchImpl(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}?force=true`, {
           method: "DELETE",
           headers: this.headers(),
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
+        await response.body?.cancel().catch(() => undefined);
         if (response.ok || response.status === 404) return;
       } catch {
         // nuovo tentativo
       }
-      await this.sleep(2_000);
     }
     console.error(`[seguito] Lavoro Speechmatics ${jobId} non cancellato: verrà eliminato dal servizio entro 7 giorni.`);
   }
 
-  private async call(method: "GET" | "POST", path: string, body?: FormData, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
+  private async call(
+    method: "GET" | "POST",
+    path: string,
+    signal: AbortSignal | undefined,
+    body?: FormData,
+    timeoutMs = REQUEST_TIMEOUT_MS,
+  ): Promise<Response> {
+    throwIfStopped(signal);
     let response: Response;
     try {
+      const timeout = AbortSignal.timeout(timeoutMs);
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
         method,
         headers: this.headers(),
         ...(body === undefined ? {} : { body }),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: signal === undefined ? timeout : AbortSignal.any([timeout, signal]),
       });
     } catch {
-      throw new TranscriptionError(MESSAGES.unreachable, true);
+      throwIfStopped(signal);
+      throw new ServiceUnavailableError(MESSAGES.unreachable);
     }
     if (response.ok) return response;
     await response.body?.cancel().catch(() => undefined);
@@ -225,15 +278,37 @@ export class SpeechmaticsTranscriber implements Transcriber {
       case 404:
         throw new TranscriptionError(MESSAGES.expired, true);
       case 429:
-        throw new TranscriptionError(MESSAGES.busy, true);
+        throw new ServiceUnavailableError(MESSAGES.busy);
       default:
-        throw new TranscriptionError(`${MESSAGES.unreachable} (HTTP ${response.status})`, true);
+        throw new ServiceUnavailableError(`${MESSAGES.unreachable} (HTTP ${response.status})`);
     }
+  }
+
+  private async pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
+    await this.sleep(ms, signal);
+    throwIfStopped(signal);
   }
 
   private headers(): Record<string, string> {
     return { Authorization: `Bearer ${this.opts.apiKey}`, Accept: "application/json" };
   }
+}
+
+function throwIfStopped(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new TranscriptionError(MESSAGES.stopped, true);
+}
+
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const done = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
 }
 
 /**
@@ -244,22 +319,29 @@ export class SpeechmaticsTranscriber implements Transcriber {
 export function toSegments(results: readonly SpeechmaticsResult[]): TranscribedSegment[] {
   const segments: TranscribedSegment[] = [];
   let current: (TranscribedSegment & { words: number; endS: number; eos: boolean }) | null = null;
+  /** Punteggiatura che si attacca alla parola successiva (es. «): va nel segmento di quella parola. */
+  let prefix = "";
   let glueNext = false;
   for (const r of results) {
     const alt = r.alternatives?.[0];
     if (alt === undefined || r.type === "entity") continue;
     if (r.type === "punctuation") {
+      const attach = r.attaches_to ?? "previous";
+      if (attach === "next") {
+        prefix += alt.content;
+        continue;
+      }
       if (current !== null) {
-        const attach = r.attaches_to ?? "previous";
         current.text += attach === "previous" || attach === "both" ? alt.content : ` ${alt.content}`;
         current.endS = Math.max(current.endS, r.end_time);
         current.endMs = secondsToMs(current.endS);
         current.eos = r.is_eos === true;
-        glueNext = attach === "next" || attach === "both";
+        glueNext = attach === "both";
       }
       continue;
     }
     const speaker = speakerLabel(alt.speaker ?? r.channel);
+    const content = prefix + alt.content;
     const pause = current === null ? 0 : r.start_time - current.endS;
     const split =
       current === null ||
@@ -271,18 +353,19 @@ export function toSegments(results: readonly SpeechmaticsResult[]): TranscribedS
         startMs: Math.round(r.start_time * 1000),
         endMs: secondsToMs(r.end_time),
         speaker,
-        text: alt.content,
+        text: content,
         words: 1,
         endS: r.end_time,
         eos: false,
       };
     } else if (current !== null) {
-      current.text += glueNext ? alt.content : ` ${alt.content}`;
+      current.text += glueNext ? content : ` ${content}`;
       current.words += 1;
       current.endS = r.end_time;
       current.endMs = secondsToMs(r.end_time);
       current.eos = false;
     }
+    prefix = "";
     glueNext = false;
   }
   if (current !== null) segments.push(finish(current));

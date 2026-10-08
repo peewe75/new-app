@@ -1,4 +1,4 @@
-import { copyFile, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -326,6 +326,66 @@ describe("PhoneInbox", () => {
     await restarted.idle();
     expect(env.transcriber.calls).toHaveLength(1);
     expect(await restarted.list()).toHaveLength(1);
+  });
+
+  it("se la trascrizione archiviata è andata persa accetta di nuovo l'audio dal telefono", async () => {
+    env.extractor.failures = [new ExtractionError("Risposta non conforme.", { retryable: false })];
+    const { upload } = await env.inbox.receive(audio("g"), META);
+    expect((await waitFor(upload.id, ["errore"])).recordingId).not.toBeNull();
+
+    // Con la trascrizione ancora presente il reinvio non serve: nessuna nuova trascrizione.
+    expect((await env.inbox.receive(audio("g"), META)).created).toBe(false);
+
+    await rm(join(env.dir, "data", "recordings"), { recursive: true, force: true });
+    await env.inbox.retry(upload.id);
+    const lost = await waitFor(upload.id, ["errore"]);
+    expect(lost.message).toMatch(/inviare di nuovo/);
+
+    const again = await env.inbox.receive(audio("g"), META);
+    expect(again).toMatchObject({ created: true, upload: { status: "ricevuta", recordingId: null } });
+    expect((await waitFor(upload.id, ["pronta"])).status).toBe("pronta");
+    expect(env.transcriber.calls).toHaveLength(2);
+  });
+
+  it("una data del file non valida vale come ora di ricezione", async () => {
+    const meta = { ...META, fileName: "registrazione.m4a", lastModifiedMs: 9e15, durationMs: 60_000 };
+    const { upload } = await env.inbox.receive(audio("h"), meta);
+    expect(upload.startedAt).toBe(NOW.toISOString());
+  });
+
+  it("all'avvio elimina invii interrotti, audio senza registrazione e stati danneggiati", async () => {
+    await mkdir(env.inboxDir, { recursive: true });
+    const orphan = "a".repeat(32);
+    const corrupt = "b".repeat(32);
+    await writeFile(join(env.inboxDir, ".in-0011223344556677"), "parziale");
+    await writeFile(join(env.inboxDir, `${orphan}.audio`), "audio");
+    await writeFile(join(env.inboxDir, `${corrupt}.json`), "");
+    await writeFile(join(env.inboxDir, `${corrupt}.audio`), "audio");
+    expect(await env.inbox.list()).toEqual([]);
+
+    await env.inbox.resume();
+    expect(await readdir(env.inboxDir)).toEqual([]);
+  });
+
+  it("all'arresto interrompe la trascrizione e la riprende al riavvio", async () => {
+    let started = false;
+    env.transcriber.transcribe = (input) =>
+      new Promise((_resolve, reject) => {
+        started = true;
+        input.signal?.addEventListener("abort", () => reject(new TranscriptionError("Interrotta.", true)));
+      });
+    const { upload } = await env.inbox.receive(audio("i"), META);
+    while (!started) await new Promise((r) => setTimeout(r, 5));
+    env.inbox.stop();
+    await env.inbox.idle();
+    expect((await env.inbox.get(upload.id))?.status).toBe("in_trascrizione");
+
+    const transcriber = new FakeTranscriber();
+    const restarted = new PhoneInbox({ dir: env.inboxDir, transcriber, deps: env.deps, maxBytes: 1024, now: () => NOW });
+    await restarted.resume();
+    await restarted.idle();
+    expect((await restarted.get(upload.id))?.status).toBe("pronta");
+    expect(transcriber.calls).toHaveLength(1);
   });
 });
 

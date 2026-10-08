@@ -83,6 +83,21 @@ describe("toSegments", () => {
     ]);
   });
 
+  it("la punteggiatura che apre (es. «) va con la parola successiva, anche in un nuovo turno", () => {
+    expect(
+      toSegments([
+        word("Ciao", 0, 0.5),
+        punct(".", 0.5),
+        { ...punct("«", 3, "S2", false), attaches_to: "next" },
+        word("Pronto", 3, 3.4, "S2"),
+        { ...punct("»", 3.4, "S2", false), attaches_to: "previous" },
+      ]),
+    ).toEqual([
+      { startMs: 0, endMs: 500, speaker: "Speaker 1", text: "Ciao." },
+      { startMs: 3000, endMs: 3400, speaker: "Speaker 2", text: "«Pronto»" },
+    ]);
+  });
+
   it("segnala il parlante non riconosciuto e ignora i risultati senza alternative", () => {
     expect(
       toSegments([
@@ -215,6 +230,45 @@ describe("SpeechmaticsTranscriber", () => {
       message: expect.stringContaining("più del previsto"),
     });
     expect(calls.at(-1)?.url).toBe(`${SPEECHMATICS_EU_URL}/jobs/job-3?force=true`);
+  });
+
+  it("un'interruzione di rete durante l'attesa non fa ripetere (e pagare) la trascrizione", async () => {
+    const { fetchImpl, calls } = fakeFetch([
+      () => json({ id: "job-5" }, 201),
+      () => {
+        throw new TypeError("fetch failed");
+      },
+      () => json({}, 502),
+      () => json({ job: { id: "job-5", status: "done" } }),
+      () => json({}, 503),
+      () => json(TRANSCRIPT),
+      () => new Response(null, { status: 200 }),
+    ]);
+    const { t, waits } = transcriber(fetchImpl);
+    const transcript = await t.transcribe(input());
+    expect(transcript.segments).toHaveLength(3);
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
+    expect(waits).toEqual([10_000, 10_000, 5_000]);
+  });
+
+  it("all'arresto di Seguito interrompe l'attesa e cancella il lavoro", async () => {
+    const controller = new AbortController();
+    const { fetchImpl, calls } = fakeFetch([
+      () => json({ id: "job-6" }, 201),
+      () => json({ job: { id: "job-6", status: "running" } }),
+      () => new Response(null, { status: 200 }),
+    ]);
+    const t = new SpeechmaticsTranscriber({
+      apiKey: "chiave-di-prova",
+      fetchImpl,
+      pollIntervalMs: 10_000,
+      sleep: async () => controller.abort(),
+    });
+    await expect(t.transcribe({ ...input(), signal: controller.signal })).rejects.toMatchObject({
+      retryable: true,
+      message: expect.stringContaining("arresto"),
+    });
+    expect(calls.map((c) => c.method)).toEqual(["POST", "GET", "DELETE"]);
   });
 
   it("la cancellazione non riuscita non fa perdere la trascrizione", async () => {
